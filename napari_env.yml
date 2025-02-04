@@ -1,0 +1,14 @@
+name: napari
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - napari
+  - pyqt
+  - napari-aicsimageio
+  - pip:
+    - napari-annotator
+    - cellpose-napari
+    - cellpose==3.0.11  # Specific version for M1 Mac compatibility

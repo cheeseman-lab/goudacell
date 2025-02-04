@@ -10,7 +10,7 @@ GoudaCell is a comprehensive toolkit for cell image analysis, focusing on accura
 
 ## Installation
 
-GoudaCell uses conda for environment management. To get started building a conda environment for running Napari:
+GoudaCell uses conda for environment management. **We strongly recommend that this is done locally to avoid GUI issues.** To get started building a conda environment for running Napari:
 
 ```bash
 # Clone the repository
@@ -18,7 +18,6 @@ git clone https://github.com/cheeseman-lab/goudacell.git
 cd goudacell
 
 # Create and activate the conda environment
-# We strongly recommend that this is done locally to avoid GUI issues
 conda env create -f environment.yml
 conda activate napari
 ```

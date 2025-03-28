@@ -83,6 +83,55 @@ For multichannel images, you'll need to merge them to RGB before segmentation:
     - `[filename]_max_proj_[channel].tif`: Raw projected images
 - Make a description.txt file that documents your work (see template)
 
+## Working with Pre-made Masks
+
+If you already have segmentation masks from another source or want to refine/label existing masks:
+
+### 1. Loading Pre-made Masks
+```bash
+conda activate napari
+napari
+```
+- Drag and drop your mask file (typically a .tif file with integer labels)
+- If also analyzing original images, load them in the same Napari session
+- Ensure your mask is properly aligned with the original image if both are loaded
+
+### 2. Refining Pre-made Masks
+1. Select the mask layer in the layer list
+2. Use Napari's label editing tools:
+   - Paint tool (press 'P') to extend or add labels
+   - Erase tool (press 'E') to remove incorrect segments
+   - Fill tool (press 'F') to fill holes
+
+3. **Merging incorrectly split cells**:
+   - Select the color picker/dropper tool (press 'D')
+   - Click on one of the cells you wish to merge to select its label/color
+   - Switch to the fill tool (press 'F')
+   - Click on the adjacent cell that should be merged with the first cell
+   - This will replace the second cell's label with the first cell's label, effectively merging them
+
+4. Adjust label colors as needed for better visualization:
+   - Right-click on the mask layer → "Color Cycler"
+   - Choose a color scheme that makes individual cells clearly visible
+
+### 3. Converting Segmentation to Cell Type Labels
+1. Duplicate the refined mask layer (right-click → "Duplicate")
+2. Rename the new layer to indicate it contains cell type labels
+3. Use the Annotator plugin (Plugins → Annotator)
+4. Create a new label scheme:
+   - Set specific label numbers for different cell types (e.g., 1 for type A, 2 for type B)
+   - Document your labeling scheme in description.txt
+5. Use the Fill tool to assign cell type labels:
+   - Select the label number for the cell type
+   - Click on cells to fill them with the appropriate label
+
+### 4. Save Refined Masks and Labels
+- Save your refined mask: Right-click on mask layer → "Save Layer(s)"
+  - Use naming convention: `[filename]_refined_mask.tif`
+- Save your cell type labels: Right-click on labels layer → "Save Layer(s)"
+  - Use naming convention: `[filename]_labels.tif`
+- Update description.txt with information about your refinements and labeling scheme
+
 ## File Organization
 
 ```
@@ -91,6 +140,7 @@ goudacell/
 │   ├── description.txt     # Description of dataset (especially which label signifies which cell type)
 │   ├── raw/                # Original microscopy files
 │   ├── processed/          # Processed images and masks
+│   ├── external_masks/     # Pre-made masks from other sources
 │   └── labels/             # Manual annotations
 └── environment.yml         # Conda environment specification
 ```

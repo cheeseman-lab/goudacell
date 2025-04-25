@@ -8,7 +8,9 @@ dependencies:
   - napari
   - pyqt
   - napari-aicsimageio
+  - micro_sam
   - pip:
     - napari-annotator
     - cellpose-napari
     - cellpose==3.0.11  # Specific version for M1 Mac compatibility
+    - stardist-napari

@@ -4,7 +4,10 @@ GoudaCell is a comprehensive toolkit for cell image analysis, focusing on accura
 
 ## Features
 
-- Image segmentation using Napari and Cellpose
+- Image segmentation using Napari with multiple engines:
+  - Cellpose for traditional cell segmentation
+  - StarDist for star-convex object detection
+  - MicroSAM (Segment Anything for Microscopy) for interactive and automatic segmentation
 - Interactive cell type labeling
 - Standardized file organization and naming conventions
 
@@ -32,12 +35,14 @@ napari
 
 ### 2. Load and Prepare Images
 - Drag and drop your microscopy files (.dv, .nd2, .tiff format supported)
-- Select napari-aicsimageio when prompted for reader choice
+- Select napari-aicsimageio when prompted for reader choice *if you are not using .tiff format*
 - Use max projection for better visualization
 - Convert to 2D view when needed
 
-### 3. Merge Channels to RGB
-For multichannel images, you'll need to merge them to RGB before segmentation:
+### 3. Choose Segmentation Method
+
+#### Option A: Cellpose Segmentation
+For multichannel images using Cellpose, you'll need to merge them to RGB before segmentation:
 1. Load your multichannel image - this creates separate layers in Napari
 2. Set each channel to the appropriate color (red, green, or blue) using the colormap settings
 3. Select all layers (typically 3)
@@ -49,16 +54,27 @@ For multichannel images, you'll need to merge them to RGB before segmentation:
    
 > **Note**: Direct segmentation of stacked/multichannel images is not supported in cellpose-napari. Always merge to RGB first.
 
-### 4. Generate Cell Segmentation
-1. Access Cellpose plugin: Plugins -> cellpose
+#### Option B: StarDist Segmentation
+StarDist is particularly effective for nucleus segmentation and densely packed objects:
+1. Access the StarDist plugin: Plugins -> StarDist
 2. Configure settings:
-   - Model: cyto3
-   - Channel: Your cytoplasmic background
-   - Optional nuclear channel: Your nuclear channel
-   - Diameter: ~150 pixels (adjust based on your cells, you can also use estimate function)
-   - You can manipulate cellprob and flow threshold as needed
+   - Select appropriate model (e.g., "2D_versatile_fluo" for fluorescent nuclei)
+   - Adjust probability threshold and NMS threshold as needed
 3. Run segmentation
 4. Review results
+
+#### Option C: MicroSAM Segmentation
+MicroSAM provides interactive and automatic segmentation options:
+1. Access MicroSAM: Plugins -> Segment Anything for Microscopy -> Annotator 2d
+2. Select image and model from the Embedding menu
+   - For cell segmentation, try the "Light Microscopy" model
+3. Use point prompts (positive/negative) or box prompts for interactive segmentation
+4. Click "Segment Object" (or press S) to generate the segmentation
+5. For automatic segmentation, click "Automatic Segmentation"
+6. Review results
+
+### 4. Generate Cell Segmentation
+Follow the steps for your chosen segmentation method (Cellpose, StarDist, or MicroSAM)
 
 ### 5. Refine Segmentation (if needed)
 1. Use the paint tool (press 'P') to add missing parts of cells (select correct cell color for each refine you do)
@@ -144,8 +160,3 @@ goudacell/
 │   └── labels/             # Manual annotations
 └── environment.yml         # Conda environment specification
 ```
-
-## Coming Soon
-
-- Improved use of Napari (without funky merge to RGB)
-- Use of other segmentation models

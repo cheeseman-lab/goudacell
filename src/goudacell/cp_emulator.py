@@ -15,16 +15,21 @@ It includes functions for:
 Adapted from brieflow's cp_emulator.py for use in GoudaCell.
 """
 
+import warnings
 from functools import partial
 from itertools import combinations, starmap
 from warnings import catch_warnings, simplefilter
 
 import numpy as np
+import skimage.feature
+import skimage.filters
 import skimage.measure
 import skimage.morphology
+import skimage.segmentation
 from decorator import decorator
 from mahotas.features import haralick, pftas, zernike_moments
 from mahotas.thresholding import otsu
+from scipy import ndimage as ndi
 from scipy.ndimage.morphology import distance_transform_edt as distance_transform
 from scipy.spatial import ConvexHull, QhullError
 from scipy.spatial.distance import pdist
@@ -1255,3 +1260,174 @@ def ubyte_haralick(intensity_image, **kwargs):
         features = [np.nan] * 13
 
     return features
+
+
+# ============================================================================
+# FOCI DETECTION AND FEATURES
+# ============================================================================
+
+
+def log_ndi(data, sigma=1):
+    """Apply Laplacian of Gaussian to each image in a stack of shape (..., I, J).
+
+    Args:
+        data: Input data array.
+        sigma: Standard deviation of the Gaussian kernel. Default is 1.
+
+    Returns:
+        Array after applying Laplacian of Gaussian.
+    """
+    if data.ndim == 2:
+        # Single 2D image
+        arr_ = -1 * ndi.gaussian_laplace(data.astype(float), sigma)
+        arr_ = np.clip(arr_, 0, 65535) / 65535
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return skimage.img_as_uint(arr_)
+    else:
+        # Stack of images - apply to each frame
+        h, w = data.shape[-2:]
+        reshaped = data.reshape((-1, h, w))
+        results = []
+        for frame in reshaped:
+            arr_ = -1 * ndi.gaussian_laplace(frame.astype(float), sigma)
+            arr_ = np.clip(arr_, 0, 65535) / 65535
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                results.append(skimage.img_as_uint(arr_))
+        return np.array(results).reshape(data.shape)
+
+
+def apply_watershed(img, smooth=4):
+    """Apply the watershed algorithm to refine segmentation.
+
+    Args:
+        img: Input binary image.
+        smooth: Size of Gaussian kernel used to smooth the distance map. Default is 4.
+
+    Returns:
+        Labeled image after watershed segmentation.
+    """
+    # Compute the distance transform of the image
+    distance = ndi.distance_transform_edt(img)
+
+    if smooth > 0:
+        # Apply Gaussian smoothing to the distance transform
+        distance = skimage.filters.gaussian(distance, sigma=smooth)
+
+    # Identify local maxima in the distance transform
+    local_max_coords = skimage.feature.peak_local_max(
+        distance, footprint=np.ones((3, 3)), exclude_border=False
+    )
+
+    # Create a boolean mask for peaks
+    local_max = np.zeros_like(distance, dtype=bool)
+    local_max[tuple(local_max_coords.T)] = True
+
+    # Label the local maxima
+    markers = ndi.label(local_max)[0]
+
+    # Apply watershed algorithm to the distance transform
+    result = skimage.segmentation.watershed(-distance, markers, mask=img)
+
+    return result.astype(np.uint16)
+
+
+def remove_border_objects(labels, mask, dilate=5):
+    """Remove labeled regions that touch the border of the given mask.
+
+    Args:
+        labels: Labeled image.
+        mask: Mask indicating the border regions.
+        dilate: Number of dilation iterations to apply to the mask. Default is 5.
+
+    Returns:
+        Labeled image with border regions removed.
+    """
+    # Dilate the mask to ensure regions touching the border are included
+    mask = skimage.morphology.binary_dilation(mask, np.ones((dilate, dilate)))
+
+    # Identify labels that need to be removed
+    remove = np.unique(labels[mask])
+
+    # Remove the identified labels from the labeled image
+    labels = labels.copy()
+    labels.flat[np.in1d(labels, remove)] = 0
+
+    return labels
+
+
+def count_labels(labels, return_list=False):
+    """Count the unique non-zero labels in a labeled segmentation mask.
+
+    Args:
+        labels: Labeled segmentation mask.
+        return_list: Whether to return the list of unique labels along with the count.
+
+    Returns:
+        Number of unique non-zero labels. If return_list is True, returns a tuple
+        containing the count and the list of unique labels.
+    """
+    # Get unique labels in the segmentation mask
+    uniques = np.unique(labels)
+    # Remove the background label (0)
+    ls = np.delete(uniques, np.where(uniques == 0))
+    # Count the unique non-zero labels
+    num_labels = len(ls)
+    # Return the count or both count and list of unique labels based on return_list flag
+    if return_list:
+        return num_labels, ls
+    return num_labels
+
+
+def find_foci(data, radius=3, threshold=10, remove_border_foci=False):
+    """Detect foci in the given image using a white tophat filter.
+
+    Args:
+        data: Input image data.
+        radius: Radius of the disk used in the white tophat filter. Default is 3.
+        threshold: Threshold value for identifying foci in the processed image.
+            Default is 10.
+        remove_border_foci: Flag to remove foci touching the image border.
+            Default is False.
+
+    Returns:
+        Labeled segmentation mask of foci.
+    """
+    # Apply white tophat filter to highlight foci
+    tophat = skimage.morphology.white_tophat(data, footprint=skimage.morphology.disk(radius))
+
+    # Apply Laplacian of Gaussian to the filtered image
+    tophat_log = log_ndi(tophat, sigma=radius)
+
+    # Threshold the image to create a binary mask
+    mask = tophat_log > threshold
+
+    # Remove small objects from the mask
+    mask = skimage.morphology.remove_small_objects(mask, min_size=(radius**2))
+
+    # Label connected components in the mask
+    labeled = skimage.measure.label(mask)
+
+    # Apply watershed algorithm to refine segmentation
+    labeled = apply_watershed(labeled, smooth=1)
+
+    if remove_border_foci:
+        # Remove foci touching the border
+        border_mask = data > 0
+        labeled = remove_border_objects(labeled, ~border_mask)
+
+    return labeled
+
+
+# Foci feature dictionary
+foci_features = {
+    "foci_count": lambda r: count_labels(r.intensity_image),
+    "foci_area": lambda r: (r.intensity_image > 0).sum(),
+}
+
+# Column names for foci features
+foci_columns = {
+    "foci_count": ["foci_count"],
+    "foci_area": ["foci_area"],
+}

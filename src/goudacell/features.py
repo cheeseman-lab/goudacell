@@ -6,6 +6,7 @@ measurements (including Zernike moments), radial distribution, and correlation
 metrics between channels.
 """
 
+import warnings
 from itertools import combinations, permutations, product
 from typing import List, Optional
 
@@ -15,6 +16,9 @@ import pandas as pd
 from goudacell.cp_emulator import (
     correlation_columns_multichannel,
     correlation_features_multichannel,
+    find_foci,
+    foci_columns,
+    foci_features,
     grayscale_columns_multichannel,
     grayscale_features_multichannel,
     intensity_columns_multichannel,
@@ -25,7 +29,7 @@ from goudacell.cp_emulator import (
     shape_columns,
     shape_features,
 )
-from goudacell.feature_table_utils import feature_table_multichannel
+from goudacell.feature_table_utils import feature_table, feature_table_multichannel
 
 # Basic features added to all feature extractions
 FEATURES_BASIC = {
@@ -44,6 +48,8 @@ def extract_features(
     include_texture: bool = True,
     include_correlation: bool = True,
     include_neighbors: bool = True,
+    foci_channel: Optional[int] = None,
+    foci_params: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Extract CellProfiler-equivalent features from segmented image.
 
@@ -67,6 +73,13 @@ def extract_features(
             (overlap, Manders coefficients, etc.).
         include_neighbors: Whether to include neighbor measurements (count,
             distances, angles).
+        foci_channel: Optional channel index for foci detection. If provided,
+            foci will be detected in this channel and foci count/area features
+            will be extracted per cell.
+        foci_params: Optional dict of parameters for foci detection:
+            - radius: Disk radius for white tophat filter (default: 3)
+            - threshold: Threshold for foci detection (default: 10)
+            - remove_border_foci: Remove foci touching border (default: False)
 
     Returns:
         DataFrame with one row per cell and columns for each extracted feature.
@@ -82,6 +95,7 @@ def extract_features(
         ...     nuclei_masks=nuclei,
         ...     cell_masks=cells,
         ...     channel_names=["DAPI", "GFP", "RFP"],
+        ...     foci_channel=2,  # Detect foci in RFP channel
         ... )
         >>> print(f"Extracted {len(features_df)} cells x {len(features_df.columns)} features")
 
@@ -97,7 +111,16 @@ def extract_features(
         - Correlation: correlation, lstsq_slope, overlap, K coefficients,
           Manders, rank-weighted colocalization
         - Neighbors: number_neighbors, percent_touching, distances, angles
+        - Foci (if foci_channel specified): foci_count, foci_area
     """
+    # Suppress skimage deprecation warnings for RegionProperties attribute renames
+    # (intensity_image -> image_intensity, etc.)
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*RegionProperties\.\w+ is deprecated.*",
+        category=FutureWarning,
+    )
+
     # Validate inputs
     if image.ndim == 2:
         image = image[np.newaxis, ...]  # Add channel dimension
@@ -171,6 +194,34 @@ def extract_features(
                 .set_index("label")
                 .add_prefix("cell_")
             )
+
+    # Extract foci features if foci channel is provided
+    if foci_channel is not None:
+        # Use cells if available, otherwise fall back to nuclei
+        foci_mask = (
+            cell_masks if (cell_masks is not None and np.sum(cell_masks) > 0) else nuclei_masks
+        )
+
+        # Get foci detection parameters
+        params = foci_params or {}
+        radius = params.get("radius", 3)
+        threshold = params.get("threshold", 10)
+        remove_border = params.get("remove_border_foci", False)
+
+        # Detect foci in the specified channel
+        foci_image = image[foci_channel]
+        foci_labeled = find_foci(
+            foci_image, radius=radius, threshold=threshold, remove_border_foci=remove_border
+        )
+
+        # Extract foci features using the cell/nuclei masks as regions
+        foci_df = feature_table(foci_labeled, foci_mask, foci_features)
+
+        # Rename columns with channel name prefix
+        ch_name = channel_names[foci_channel] if channel_names else f"ch{foci_channel}"
+        foci_column_map = {feat: f"{ch_name}_{col[0]}" for feat, col in foci_columns.items()}
+        foci_df = foci_df.rename(columns=foci_column_map).set_index("label").add_prefix("cell_")
+        dfs.append(foci_df)
 
     # Concatenate all features
     result_df = pd.concat(dfs, axis=1, join="outer", sort=False).reset_index()
@@ -337,4 +388,5 @@ def get_feature_categories() -> dict:
         "correlation": "Channel-to-channel correlation features",
         "colocalization": "Colocalization metrics (overlap, Manders, etc.)",
         "neighbors": "Spatial neighbor measurements",
+        "foci": "Foci detection features (count, area) - requires foci_channel",
     }

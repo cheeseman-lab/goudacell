@@ -1,12 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=goudacell
-#SBATCH --output=goudacell_%j.out
-#SBATCH --error=goudacell_%j.err
-#SBATCH --time=4:00:00
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --mem=32G
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=4
+#SBATCH --mem=32gb
+#SBATCH --partition=nvidia-A4000-20
+#SBATCH --gres=gpu:1
+#SBATCH --output=goudacell-%j.out
 
 # GoudaCell Batch Segmentation SLURM Script
 #
@@ -25,7 +26,11 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-CONFIG_PATH="$1"
+CONFIG_PATH="$(realpath "$1")"
+CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+
+# Change to config directory (so relative paths in config work)
+cd "$CONFIG_DIR"
 
 # Activate conda environment
 # Modify this to match your environment name

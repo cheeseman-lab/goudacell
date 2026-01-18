@@ -102,22 +102,34 @@ def _load_dv(
     channel: Optional[int] = None,
     z_project: bool = True,
 ) -> np.ndarray:
-    """Load DeltaVision (DV) file using mrc package."""
+    """Load DeltaVision (DV) file using mrc package.
+
+    The mrc library typically returns DV files as (C, Z, Y, X).
+    This function handles z-projection and channel selection to return
+    data in (C, Y, X) format.
+    """
     import mrc
 
     data = mrc.imread(file_path)
 
-    # DV files are typically (Z, C, Y, X) or (C, Z, Y, X)
-    # mrc.imread returns the raw array
-    if z_project and data.ndim == 4:
-        # Assume Z is first dimension
-        data = np.max(data, axis=0)
-    elif z_project and data.ndim == 3:
-        # Could be (Z, Y, X) single channel
-        pass
+    # mrc.imread returns DV files as (C, Z, Y, X) for 4D data
+    if data.ndim == 4:
+        # Shape is (C, Z, Y, X)
+        if z_project:
+            # Max project along Z (axis 1)
+            data = np.max(data, axis=1)  # Now (C, Y, X)
 
-    if channel is not None:
-        if data.ndim >= 3:
+        if channel is not None:
+            data = data[channel]  # Now (Y, X)
+
+    elif data.ndim == 3:
+        # Could be (Z, Y, X) single channel or (C, Y, X)
+        # Heuristic: if first dim is much smaller than others, likely C or Z
+        if z_project and data.shape[0] > 10:
+            # Assume (Z, Y, X), project along Z
+            data = np.max(data, axis=0)
+        # If channel specified and still 3D, take that channel
+        if channel is not None and data.ndim == 3:
             data = data[channel]
 
     return data

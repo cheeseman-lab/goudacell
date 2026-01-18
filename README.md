@@ -1,6 +1,13 @@
 # GoudaCell
 
-Cell segmentation on the Whitehead HPC using Cellpose.
+Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
+
+## Features
+
+- **Segmentation modes**: nuclei-only, cells-only, or dual (both)
+- **Feature extraction**: CellProfiler-equivalent morphological and intensity features
+- **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
+- **Cellpose 3 & 4**: Supports both versions with automatic model selection
 
 ## Getting Started
 
@@ -15,14 +22,15 @@ conda activate goudacell
 uv pip install -e ".[cellpose3]"  # For most cells (rounded shapes)
 uv pip install -e ".[cellpose4]"  # For complex cell shapes
 
-# Register as a Jupyter kernel (so it appears in the Jupyter interface)
+# Register as a Jupyter kernel
 python -m ipykernel install --user --name goudacell --display-name "goudacell"
 ```
 
-### 2. Test Parameters on a Few Images
+### 2. Test Parameters Interactively
 
 ```bash
-# Start Jupyter on a GPU node
+# Start Jupyter on a GPU node (run from goudacell directory)
+cd /path/to/goudacell
 sbatch scripts/jupyter_gpu.sh
 
 # Check the output file for the URL
@@ -30,9 +38,11 @@ cat goudacell_jupyter-*.out
 ```
 
 Open the notebook at `notebooks/segmentation.ipynb` and:
-1. Set your image directory and output directory
-2. Run through the cells to test different parameters
-3. When happy, run the "Generate Batch Config" cell
+1. Set your image directory and file pattern
+2. Choose segmentation mode: `"nuclei"`, `"cells"`, or `"dual"`
+3. Adjust parameters (diameter, thresholds) using the sweep cells
+4. Run feature extraction (optional)
+5. Generate batch config when happy with results
 
 ### 3. Run Batch Segmentation
 
@@ -41,12 +51,54 @@ Open the notebook at `notebooks/segmentation.ipynb` and:
 sbatch scripts/run_segmentation.sh /path/to/segmentation_config.yaml
 ```
 
+## Segmentation Modes
+
+| Mode | Output | Use case |
+|------|--------|----------|
+| `nuclei` | `*_nuclei_mask.tif` | Nuclear segmentation only |
+| `cells` | `*_mask.tif` | Cell segmentation only |
+| `dual` | `*_nuclei_mask.tif` + `*_cell_mask.tif` | Both nuclei and cells |
+
+## Feature Extraction
+
+Extract CellProfiler-equivalent features from segmented images:
+
+```python
+from goudacell import load_image, segment_nuclei_and_cells, extract_features
+
+image = load_image("sample.tif")
+nuclei, cells = segment_nuclei_and_cells(image, ...)
+
+features_df = extract_features(
+    image,
+    nuclei_masks=nuclei,
+    cell_masks=cells,
+    channel_names=["DAPI", "GFP", "RFP"],
+)
+```
+
+**Feature categories** (~100+ features per compartment):
+- **Intensity**: mean, std, min, max, median, quartiles, edge intensities
+- **Shape**: area, perimeter, solidity, eccentricity, Zernike/Hu moments
+- **Texture**: Haralick (13), PFTAS (54)
+- **Distribution**: radial intensity distribution
+- **Correlation**: channel correlation, colocalization metrics
+- **Neighbors**: counts, distances, angles
+
 ## Which Cellpose Version?
 
 | Version | Install with | Use for |
 |---------|--------------|---------|
 | Cellpose 3 | `.[cellpose3]` | Round cells (most common) |
 | Cellpose 4 | `.[cellpose4]` | Irregular/complex shapes |
+
+## CLI Commands
+
+```bash
+goudacell segment config.yaml      # Batch segmentation from config
+goudacell single input.tif out.tif # Single file segmentation
+goudacell version                  # Check versions
+```
 
 ## File Formats Supported
 

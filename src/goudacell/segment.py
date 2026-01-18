@@ -149,7 +149,8 @@ def segment_nuclei_and_cells(
     cyto_channel: int,
     nuclei_diameter: float,
     cell_diameter: float,
-    model: str = "cyto3",
+    cell_model: str = "cyto3",
+    nuclei_model: str = "nuclei",
     nuclei_flow_threshold: float = 0.4,
     nuclei_cellprob_threshold: float = 0.0,
     cell_flow_threshold: float = 0.4,
@@ -165,7 +166,8 @@ def segment_nuclei_and_cells(
         cyto_channel: Index of the cytoplasmic channel.
         nuclei_diameter: Estimated nuclear diameter in pixels.
         cell_diameter: Estimated cell diameter in pixels.
-        model: Cellpose model for cell segmentation.
+        cell_model: Cellpose model for cell segmentation (e.g., "cyto3", "cpsam").
+        nuclei_model: Cellpose model for nuclei segmentation (e.g., "nuclei", "cpsam").
         nuclei_flow_threshold: Flow threshold for nuclei segmentation.
         nuclei_cellprob_threshold: Cell prob threshold for nuclei segmentation.
         cell_flow_threshold: Flow threshold for cell segmentation.
@@ -176,7 +178,8 @@ def segment_nuclei_and_cells(
     Returns:
         Tuple of (nuclei_mask, cell_mask).
     """
-    _validate_model(model)
+    _validate_model(cell_model)
+    _validate_model(nuclei_model)
 
     from cellpose.models import CellposeModel
 
@@ -185,14 +188,14 @@ def segment_nuclei_and_cells(
 
     # Create models
     if _is_cellpose_4x():
-        nuclei_model = CellposeModel(pretrained_model="cpsam", gpu=gpu)
-        cell_model = CellposeModel(pretrained_model=model, gpu=gpu)
+        nuclei_cp_model = CellposeModel(pretrained_model=nuclei_model, gpu=gpu)
+        cell_cp_model = CellposeModel(pretrained_model=cell_model, gpu=gpu)
     else:
-        nuclei_model = CellposeModel(model_type="nuclei", gpu=gpu)
-        cell_model = CellposeModel(model_type=model, gpu=gpu)
+        nuclei_cp_model = CellposeModel(model_type=nuclei_model, gpu=gpu)
+        cell_cp_model = CellposeModel(model_type=cell_model, gpu=gpu)
 
     # Segment nuclei (using blue channel = DAPI)
-    nuclei_masks, _, _ = nuclei_model.eval(
+    nuclei_masks, _, _ = nuclei_cp_model.eval(
         rgb[2],  # Blue channel (DAPI)
         diameter=nuclei_diameter,
         flow_threshold=nuclei_flow_threshold,
@@ -200,18 +203,17 @@ def segment_nuclei_and_cells(
     )
 
     # Segment cells
-    if _is_cellpose_4x() and model == "cpsam":
-        # CPSAM uses all 3 channels
-        cell_masks, _, _ = cell_model.eval(
+    if _is_cellpose_4x():
+        # Cellpose 4.x auto-detects channels from image shape (no channels param)
+        cell_masks, _, _ = cell_cp_model.eval(
             rgb,
             diameter=cell_diameter,
-            channels=[1, 2, 3],
             flow_threshold=cell_flow_threshold,
             cellprob_threshold=cell_cellprob_threshold,
         )
     else:
-        # Standard models use [cytoplasm, nuclei]
-        cell_masks, _, _ = cell_model.eval(
+        # Cellpose 3.x: use [cytoplasm, nuclei] channel spec
+        cell_masks, _, _ = cell_cp_model.eval(
             rgb,
             diameter=cell_diameter,
             channels=[2, 3],  # Green=cyto, Blue=nuclei

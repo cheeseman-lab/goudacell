@@ -14,6 +14,10 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 ### 1. Set Up Your Environment (one time)
 
 ```bash
+# Clone the repository on fry
+git clone https://github.com/cheeseman-lab/goudacell.git
+cd goudacell
+
 # Create the environment
 conda create -n goudacell -c conda-forge python=3.11 uv pip -y
 conda activate goudacell
@@ -61,15 +65,15 @@ sbatch scripts/run_segmentation.sh /path/to/segmentation_config.yaml
 
 ## Feature Extraction
 
-Extract CellProfiler-equivalent features from segmented images:
+Extract CellProfiler-equivalent features from segmented images (~100+ features per compartment):
 
-**Feature categories** (~100+ features per compartment):
 - **Intensity**: mean, std, min, max, median, quartiles, edge intensities
 - **Shape**: area, perimeter, solidity, eccentricity, Zernike/Hu moments
 - **Texture**: Haralick (13), PFTAS (54)
 - **Distribution**: radial intensity distribution
 - **Correlation**: channel correlation, colocalization metrics
 - **Neighbors**: counts, distances, angles
+- **Foci**: count and area per channel (optional)
 
 ## Which Cellpose Version?
 

@@ -63,20 +63,6 @@ sbatch scripts/run_segmentation.sh /path/to/segmentation_config.yaml
 
 Extract CellProfiler-equivalent features from segmented images:
 
-```python
-from goudacell import load_image, segment_nuclei_and_cells, extract_features
-
-image = load_image("sample.tif")
-nuclei, cells = segment_nuclei_and_cells(image, ...)
-
-features_df = extract_features(
-    image,
-    nuclei_masks=nuclei,
-    cell_masks=cells,
-    channel_names=["DAPI", "GFP", "RFP"],
-)
-```
-
 **Feature categories** (~100+ features per compartment):
 - **Intensity**: mean, std, min, max, median, quartiles, edge intensities
 - **Shape**: area, perimeter, solidity, eccentricity, Zernike/Hu moments
@@ -91,14 +77,6 @@ features_df = extract_features(
 |---------|--------------|---------|
 | Cellpose 3 | `.[cellpose3]` | Round cells (most common) |
 | Cellpose 4 | `.[cellpose4]` | Irregular/complex shapes |
-
-## CLI Commands
-
-```bash
-goudacell segment config.yaml      # Batch segmentation from config
-goudacell single input.tif out.tif # Single file segmentation
-goudacell version                  # Check versions
-```
 
 ## File Formats Supported
 

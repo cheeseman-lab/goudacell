@@ -14,6 +14,9 @@ conda activate goudacell
 # Install goudacell (choose ONE):
 uv pip install -e ".[cellpose3]"  # For most cells (rounded shapes)
 uv pip install -e ".[cellpose4]"  # For complex cell shapes
+
+# Register as a Jupyter kernel (so it appears in the Jupyter interface)
+python -m ipykernel install --user --name goudacell --display-name "goudacell"
 ```
 
 ### 2. Test Parameters on a Few Images
@@ -22,8 +25,8 @@ uv pip install -e ".[cellpose4]"  # For complex cell shapes
 # Start Jupyter on a GPU node
 sbatch scripts/jupyter_gpu.sh
 
-# Check the output file for connection instructions
-cat jupyter_gpu_*.out
+# Check the output file for the URL
+cat goudacell_jupyter-*.out
 ```
 
 Open the notebook at `notebooks/segmentation.ipynb` and:

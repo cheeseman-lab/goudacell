@@ -1,2 +1,52 @@
-# Data directory
-data/
+# Claude
+.claude/
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.env
+.venv/
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific - ignore images but keep data folder
+data/*
+!data/.gitkeep
+*.tif
+*.tiff
+*.nd2
+*.dv
+*_mask.tif
+
+# SLURM outputs
+*.out
+*.err
+slurm-*.out
+
+# Logs
+*.log
+
+# Generated configs
+*_config.yaml

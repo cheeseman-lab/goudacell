@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goudacell"
+version = "0.1.0"
+description = "HPC-compatible cell segmentation using Cellpose"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    # Image I/O (tlambert03 packages)
+    "nd2>=0.10.0",
+    "mrc>=0.3.0",
+    "tifffile>=2024.1.0",
+    # Core
+    "numpy>=1.24.0",
+    "scikit-image>=0.22.0",
+    "pyyaml>=6.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    # Notebook
+    "jupyterlab>=4.0.0",
+    "matplotlib>=3.8.0",
+    "ipywidgets>=8.1.0",
+    # Dev
+    "ruff>=0.4.0",
+]
+
+[project.optional-dependencies]
+# Cellpose 3.x - for cyto3, nuclei, cyto2 models (rounded cells)
+cellpose3 = [
+    "cellpose==3.1.0",
+]
+# Cellpose 4.x - for cpsam model only (requires GPU, better for complex shapes)
+cellpose4 = [
+    "cellpose==4.0.4",
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+]
+
+[project.scripts]
+goudacell = "goudacell.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["goudacell"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+pydocstyle = { convention = "google" }
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["D100", "D103"]
+"notebooks/*.py" = ["D100", "D103"]
+"*.ipynb" = ["D100", "D103"]

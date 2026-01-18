@@ -8,7 +8,7 @@ metrics between channels.
 
 import warnings
 from itertools import combinations, permutations, product
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -48,7 +48,7 @@ def extract_features(
     include_texture: bool = True,
     include_correlation: bool = True,
     include_neighbors: bool = True,
-    foci_channel: Optional[int] = None,
+    foci_channel: Optional[Union[int, List[int]]] = None,
     foci_params: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Extract CellProfiler-equivalent features from segmented image.
@@ -73,9 +73,9 @@ def extract_features(
             (overlap, Manders coefficients, etc.).
         include_neighbors: Whether to include neighbor measurements (count,
             distances, angles).
-        foci_channel: Optional channel index for foci detection. If provided,
-            foci will be detected in this channel and foci count/area features
-            will be extracted per cell.
+        foci_channel: Optional channel index or list of indices for foci detection.
+            If provided, foci will be detected in the specified channel(s) and
+            foci count/area features will be extracted per cell for each channel.
         foci_params: Optional dict of parameters for foci detection:
             - radius: Disk radius for white tophat filter (default: 3)
             - threshold: Threshold for foci detection (default: 10)
@@ -208,20 +208,28 @@ def extract_features(
         threshold = params.get("threshold", 10)
         remove_border = params.get("remove_border_foci", False)
 
-        # Detect foci in the specified channel
-        foci_image = image[foci_channel]
-        foci_labeled = find_foci(
-            foci_image, radius=radius, threshold=threshold, remove_border_foci=remove_border
-        )
+        # Normalize to list for consistent handling
+        if isinstance(foci_channel, int):
+            foci_channels = [foci_channel]
+        else:
+            foci_channels = foci_channel
 
-        # Extract foci features using the cell/nuclei masks as regions
-        foci_df = feature_table(foci_labeled, foci_mask, foci_features)
+        # Process each foci channel
+        for fc in foci_channels:
+            # Detect foci in the specified channel
+            foci_image = image[fc]
+            foci_labeled = find_foci(
+                foci_image, radius=radius, threshold=threshold, remove_border_foci=remove_border
+            )
 
-        # Rename columns with channel name prefix
-        ch_name = channel_names[foci_channel] if channel_names else f"ch{foci_channel}"
-        foci_column_map = {feat: f"{ch_name}_{col[0]}" for feat, col in foci_columns.items()}
-        foci_df = foci_df.rename(columns=foci_column_map).set_index("label").add_prefix("cell_")
-        dfs.append(foci_df)
+            # Extract foci features using the cell/nuclei masks as regions
+            foci_df = feature_table(foci_labeled, foci_mask, foci_features)
+
+            # Rename columns with channel name prefix
+            ch_name = channel_names[fc] if channel_names else f"ch{fc}"
+            foci_column_map = {feat: f"{ch_name}_{col[0]}" for feat, col in foci_columns.items()}
+            foci_df = foci_df.rename(columns=foci_column_map).set_index("label").add_prefix("cell_")
+            dfs.append(foci_df)
 
     # Concatenate all features
     result_df = pd.concat(dfs, axis=1, join="outer", sort=False).reset_index()

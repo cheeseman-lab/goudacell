@@ -1,6 +1,6 @@
 """GoudaCell: HPC-compatible cell segmentation using Cellpose."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from goudacell.features import extract_features
 from goudacell.io import load_image, save_mask

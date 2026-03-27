@@ -9,6 +9,21 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
 - **Cellpose 3 & 4**: Supports both versions with automatic model selection
 
+GoudaCell is a **single-shot tool** — run it once on your images to produce segmentation masks and features, then use the outputs in your downstream analysis. Part of the [fry-python-tools](https://github.com/cheeseman-lab) ecosystem (see also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) for protein embeddings).
+
+### What to do with the outputs
+
+**Segmentation masks** (TIFF label images):
+- Morphological profiling — extract per-cell features and cluster phenotypes ([Bray et al. 2016, Nature Protocols](https://doi.org/10.1038/nprot.2016.105))
+- Perturbation scoring — compare feature distributions between control and perturbed cells ([Celik et al. 2024, eLife](https://elifesciences.org/reviewed-preprints/94964))
+- Single-cell tracking — link masks across timepoints for live-cell analysis
+- Quality control — filter segmented objects by size, shape, or intensity
+
+**Extracted features** (CSV, ~100+ features per cell):
+- Dimensionality reduction — PCA/UMAP on feature space for phenotype discovery
+- Classification — train models to distinguish cell states or drug responses
+- Correlation analysis — link morphological features to genetic perturbations
+
 ## Getting Started
 
 ### 1. Set Up Your Environment (one time)

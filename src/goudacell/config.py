@@ -13,6 +13,9 @@ class FeatureExtractionParams:
 
     Attributes:
         enabled: Whether to run feature extraction.
+        method: Extraction backend. One of "cp_emulator" (built-in, default),
+            "cp_measure" (requires cp-measure package), or "cellprofiler"
+            (requires cellprofiler-core package).
         channel_names: Names for each channel (auto-detected if None).
         include_texture: Include Haralick/PFTAS texture features (slower).
         include_correlation: Include channel correlation features.
@@ -21,11 +24,15 @@ class FeatureExtractionParams:
     """
 
     enabled: bool = False
+    method: Literal["cp_emulator", "cp_measure", "cellprofiler"] = "cp_emulator"
     channel_names: Optional[List[str]] = None
     include_texture: bool = True
     include_correlation: bool = True
     include_neighbors: bool = True
     output_path: str = "features.csv"
+    # CellProfiler headless options (only used when method="cellprofiler")
+    pipeline_file: Optional[str] = None
+    cellprofiler_cmd: str = "cellprofiler"
 
 
 @dataclass
@@ -160,14 +167,19 @@ class SegmentationConfig:
 
         # Add feature extraction params if enabled
         if self.feature_extraction is not None:
-            data["feature_extraction"] = {
+            fe_data = {
                 "enabled": self.feature_extraction.enabled,
+                "method": self.feature_extraction.method,
                 "channel_names": self.feature_extraction.channel_names,
                 "include_texture": self.feature_extraction.include_texture,
                 "include_correlation": self.feature_extraction.include_correlation,
                 "include_neighbors": self.feature_extraction.include_neighbors,
                 "output_path": self.feature_extraction.output_path,
             }
+            if self.feature_extraction.method == "cellprofiler":
+                fe_data["pipeline_file"] = self.feature_extraction.pipeline_file
+                fe_data["cellprofiler_cmd"] = self.feature_extraction.cellprofiler_cmd
+            data["feature_extraction"] = fe_data
 
         with open(yaml_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)

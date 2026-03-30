@@ -50,13 +50,17 @@ def extract_features(
     include_neighbors: bool = True,
     foci_channel: Optional[Union[int, List[int]]] = None,
     foci_params: Optional[dict] = None,
+    method: str = "cp_emulator",
+    pipeline_file: Optional[str] = None,
+    cellprofiler_cmd: str = "cellprofiler",
 ) -> pd.DataFrame:
     """Extract CellProfiler-equivalent features from segmented image.
 
-    This function extracts comprehensive morphological and intensity features
-    from segmented nuclei and optionally cells. Features are extracted per
-    channel and include intensity statistics, texture metrics, shape
-    measurements, and correlation between channels.
+    Supports three extraction backends:
+    - "cp_emulator" (default): Built-in reimplementation of CellProfiler features.
+    - "cp_measure": Lightweight cp_measure package (requires `.[cp_measure]`).
+    - "cellprofiler": Runs CellProfiler headlessly via CLI subprocess.
+      Requires cellprofiler in PATH and a .cppipe pipeline file.
 
     Args:
         image: Multichannel image array with shape (C, H, W) where C is the
@@ -76,43 +80,53 @@ def extract_features(
         foci_channel: Optional channel index or list of indices for foci detection.
             If provided, foci will be detected in the specified channel(s) and
             foci count/area features will be extracted per cell for each channel.
+            Only supported with cp_emulator method.
         foci_params: Optional dict of parameters for foci detection:
             - radius: Disk radius for white tophat filter (default: 3)
             - threshold: Threshold for foci detection (default: 10)
             - remove_border_foci: Remove foci touching border (default: False)
+        method: Extraction backend. One of "cp_emulator", "cp_measure",
+            or "cellprofiler".
+        pipeline_file: Path to .cppipe file (cellprofiler method only).
+        cellprofiler_cmd: CellProfiler executable (cellprofiler method only).
 
     Returns:
         DataFrame with one row per cell and columns for each extracted feature.
         Column prefixes indicate compartment: "nucleus_", "cell_", "cytoplasm_".
         Feature names follow CellProfiler conventions where possible.
-
-    Example:
-        >>> from goudacell import load_image, segment_nuclei_and_cells, extract_features
-        >>> image = load_image("sample.nd2")
-        >>> nuclei, cells = segment_nuclei_and_cells(image, ...)
-        >>> features_df = extract_features(
-        ...     image,
-        ...     nuclei_masks=nuclei,
-        ...     cell_masks=cells,
-        ...     channel_names=["DAPI", "GFP", "RFP"],
-        ...     foci_channel=2,  # Detect foci in RFP channel
-        ... )
-        >>> print(f"Extracted {len(features_df)} cells x {len(features_df.columns)} features")
-
-    Notes:
-        Feature categories (~100+ features per compartment):
-        - Intensity (17): mean, std, min, max, integrated, median, mad,
-          quartiles, edge intensities, mass displacement, center of mass
-        - Shape (25+): area, perimeter, solidity, extent, eccentricity,
-          axes, orientation, compactness, radius, feret diameter, hu moments,
-          zernike moments
-        - Texture (67): Haralick (13), PFTAS (54)
-        - Distribution (19): frac_at_d, mean_frac, radial_cv, weighted hu moments
-        - Correlation: correlation, lstsq_slope, overlap, K coefficients,
-          Manders, rank-weighted colocalization
-        - Neighbors: number_neighbors, percent_touching, distances, angles
-        - Foci (if foci_channel specified): foci_count, foci_area
     """
+    # Dispatch to alternative backends
+    if method == "cp_measure":
+        from goudacell.features_cp_measure import extract_features_cp_measure
+
+        return extract_features_cp_measure(
+            image,
+            nuclei_masks=nuclei_masks,
+            cell_masks=cell_masks,
+            channel_names=channel_names,
+            include_texture=include_texture,
+            include_correlation=include_correlation,
+            include_neighbors=include_neighbors,
+        )
+    elif method == "cellprofiler":
+        from goudacell.features_cellprofiler import extract_features_cellprofiler
+
+        return extract_features_cellprofiler(
+            image,
+            nuclei_masks=nuclei_masks,
+            cell_masks=cell_masks,
+            channel_names=channel_names,
+            pipeline_file=pipeline_file,
+            cellprofiler_cmd=cellprofiler_cmd,
+            include_texture=include_texture,
+            include_correlation=include_correlation,
+            include_neighbors=include_neighbors,
+        )
+    elif method != "cp_emulator":
+        raise ValueError(
+            f"Unknown extraction method '{method}'. "
+            "Supported: 'cp_emulator', 'cp_measure', 'cellprofiler'"
+        )
     # Suppress skimage deprecation warnings for RegionProperties attribute renames
     # (intensity_image -> image_intensity, etc.)
     warnings.filterwarnings(

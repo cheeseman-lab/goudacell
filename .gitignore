@@ -39,6 +39,10 @@ data/*
 *.dv
 *_mask.tif
 
+# Allow test fixture crops
+!tests/data/
+!tests/data/*.tif
+
 # SLURM outputs
 *.out
 *.err

@@ -118,6 +118,9 @@ def segment(
                             include_texture=cfg.feature_extraction.include_texture,
                             include_correlation=cfg.feature_extraction.include_correlation,
                             include_neighbors=cfg.feature_extraction.include_neighbors,
+                            method=cfg.feature_extraction.method,
+                            pipeline_file=cfg.feature_extraction.pipeline_file,
+                            cellprofiler_cmd=cfg.feature_extraction.cellprofiler_cmd,
                         )
                         features_path = cfg.get_features_output_path(input_file)
                         features_df.to_csv(features_path, index=False)

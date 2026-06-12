@@ -107,12 +107,9 @@ def segment(
             task = progress.add_task(f"Processing {input_file.name}...", total=None)
 
             try:
-                # Load image
-                image = load_image(
-                    input_file,
-                    channel=cfg.channel_to_segment,
-                    z_project=cfg.z_project,
-                )
+                # Load the full (multichannel) image so feature extraction can
+                # see every channel; segmentation selects its channel below.
+                image = load_image(input_file, channel=None, z_project=cfg.z_project)
 
                 if cfg.mode == "dual" and cfg.dual:
                     # Dual mode: segment nuclei and cells
@@ -167,8 +164,14 @@ def segment(
                     if cfg.mode == "nuclei":
                         model = "nuclei"
 
+                    # Segment on the chosen channel, but keep the full image
+                    # for feature extraction.
+                    seg_image = image
+                    if cfg.channel_to_segment is not None and image.ndim == 3:
+                        seg_image = image[cfg.channel_to_segment]
+
                     masks = run_segment(
-                        image,
+                        seg_image,
                         diameter=cfg.diameter,
                         model=model,
                         channels=cfg.channels,

@@ -3,9 +3,8 @@
 The notebook stays thin: it constructs a :class:`ParameterUI` and renders four
 focused blocks — **data** (look at the image and its channels), **segment**
 (tune with sliders, estimate diameters, sweep and compare overlays), **features**
-(extract per-cell measurements), and **config** (load an existing config or
-generate one). All heavy logic lives in the rest of the package, so this module
-is glue.
+(extract per-cell measurements), and **config** (name the run and generate its
+config). All heavy logic lives in the rest of the package, so this module is glue.
 
 Usage in a notebook::
 
@@ -14,7 +13,7 @@ Usage in a notebook::
     ui.data        # block 1 — inspect the image
     ui.segment     # block 2 — tune / sweep
     ui.features    # block 3 — extract features
-    ui.config      # block 4 — load / generate config
+    ui.config      # block 4 — name the run + generate config
 """
 
 from pathlib import Path
@@ -364,11 +363,9 @@ class ParameterUI:
         )
 
         # ---- Block 4: config ----------------------------------------------
-        self.config_path_w = widgets.Text(
-            value="", placeholder="path to an existing segmentation_config.yaml",
-            description="Load:", layout=wide,
+        self.config_name_w = widgets.Text(
+            value="segmentation_config", description="Name:", layout=wide
         )
-        self.load_config_btn = widgets.Button(description="Load config", icon="upload")
         self.config_btn = widgets.Button(
             description="Generate config", button_style="success", icon="floppy-disk"
         )
@@ -377,10 +374,12 @@ class ParameterUI:
             [
                 widgets.HTML(
                     "<h3>4 · Config</h3>"
-                    "<i>Load an existing config to prefill every control, or generate one "
-                    "from the current settings.</i>"
+                    "<i>Name this run. The config is written to "
+                    "<code>configs/&lt;name&gt;.yaml</code>; the batch run dumps masks to "
+                    "<code>masks/&lt;name&gt;/</code> and features to "
+                    "<code>features/&lt;name&gt;/</code>.</i>"
                 ),
-                widgets.HBox([self.config_path_w, self.load_config_btn]),
+                self.config_name_w,
                 self.config_btn,
                 self.config_output,
             ]
@@ -409,7 +408,6 @@ class ParameterUI:
         self.sweep_btn.on_click(self._on_sweep)
         self.sweep_apply_btn.on_click(self._on_apply_sweep)
         self.preview_feat_btn.on_click(self._on_preview_features)
-        self.load_config_btn.on_click(self._on_load_config)
         self.config_btn.on_click(self._on_generate)
 
     def _sync_mode_visibility(self) -> None:
@@ -887,106 +885,38 @@ class ParameterUI:
             lines.append(detail)
         else:
             lines.append("Features: off")
-        lines.append(
-            f"Inputs: {config.input_dir}/{config.file_pattern} "
-            f"→ outputs: {config.output_dir}"
-        )
+        lines.append(f"Inputs: {config.input_dir}/{config.file_pattern}")
         return lines
 
     def _on_generate(self, _btn) -> None:
-        """Write the batch config YAML to the config folder."""
-        self.config_output.clear_output(wait=True)
-        with self.config_output:
-            config = self.build_config()
-            config_dir = Path(self.config_dir).resolve()
-            config_dir.mkdir(parents=True, exist_ok=True)
-            config_path = config_dir / "segmentation_config.yaml"
-            config.to_yaml(config_path)
-            print("Config saved — here's what you chose:\n")
-            for line in self._config_recap(config):
-                print(line)
-            print(f"\nWritten to: {config_path}")
-            print("Run batch segmentation (from the repo root) with:")
-            print(f"  sbatch scripts/run_segmentation.sh {config_path}")
+        """Write the run config and report where the config, masks, and features go.
 
-    def apply_config(self, config) -> None:
-        """Populate every widget from a SegmentationConfig.
-
-        Args:
-            config: A SegmentationConfig to load into the controls.
+        Everything organizes under the run name: the config lands in
+        ``configs/<name>.yaml`` and the batch run dumps masks to
+        ``masks/<name>/`` and features to ``features/<name>/`` (all siblings of
+        the data folder).
         """
-        self.input_dir_w.value = config.input_dir
-        self.file_pattern_w.value = config.file_pattern
-        self.output_dir = config.output_dir
-        self.remove_edge.value = config.remove_edge_cells
-        self.z_project.value = config.z_project
-        self.gpu.value = config.gpu
-
-        if config.mode == "dual" and config.dual is not None:
-            d = config.dual
-            self.mode_w.value = "dual"
-            self.nuclei_model, self.cell_model = d.nuclei_model, d.cell_model
-            self.nuc_channel.value, self.cell_channel.value = d.nuclei_channel, d.cyto_channel
-            self.nuc_diameter.value, self.cell_diameter.value = d.nuclei_diameter, d.cell_diameter
-            self.nuc_flow.value, self.cell_flow.value = (
-                d.nuclei_flow_threshold, d.cell_flow_threshold,
-            )
-            self.nuc_cellprob.value, self.cell_cellprob.value = (
-                d.nuclei_cellprob_threshold, d.cell_cellprob_threshold,
-            )
-        elif config.mode == "nuclei":
-            self.mode_w.value = "nuclei"
-            self.nuclei_model = config.model
-            if config.channel_to_segment is not None:
-                self.nuc_channel.value = config.channel_to_segment
-            self.nuc_diameter.value = config.diameter
-            self.nuc_flow.value = config.flow_threshold
-            self.nuc_cellprob.value = config.cellprob_threshold
-        else:  # cells
-            self.mode_w.value = "cells"
-            self.cell_model = config.model
-            if config.channel_to_segment is not None:
-                self.cell_channel.value = config.channel_to_segment
-            self.cell_diameter.value = config.diameter
-            self.cell_flow.value = config.flow_threshold
-            self.cell_cellprob.value = config.cellprob_threshold
-
-        fe = config.feature_extraction
-        if fe is not None:
-            self.feat_enabled.value = fe.enabled
-            # A loaded config may name a backend not installed here; surface it
-            # rather than crash the dropdown.
-            if fe.method not in self.feat_method.options:
-                self.feat_method.options = list(self.feat_method.options) + [fe.method]
-            self.feat_method.value = fe.method
-            self.feat_channels.value = "" if not fe.channels else ",".join(map(str, fe.channels))
-            self.feat_channel_names.value = (
-                "" if not fe.channel_names else ",".join(fe.channel_names)
-            )
-            self.feat_compartments.value = tuple(fe.compartments or COMPARTMENTS)
-            self.feat_texture.value = fe.include_texture
-            self.feat_correlation.value = fe.include_correlation
-            self.feat_neighbors.value = fe.include_neighbors
-            self.feat_combine.value = fe.combine_tables
-
-        self._refresh_images()
-        self._sync_mode_visibility()
-
-    def _on_load_config(self, _btn) -> None:
-        """Load an existing config file into the controls."""
-        from goudacell.config import SegmentationConfig
-
         self.config_output.clear_output(wait=True)
         with self.config_output:
-            path = Path(self.config_path_w.value).expanduser()
-            if not path.is_file():
-                print(f"No config file at: {path}")
-                return
-            config = SegmentationConfig.from_yaml(path)
-            self.apply_config(config)
-            print(f"Loaded {path} — controls updated:\n")
+            name = Path(self.config_name_w.value.strip() or "segmentation_config").stem
+            root = Path(self.input_dir_w.value).resolve().parent
+            config_path = root / "configs" / f"{name}.yaml"
+            masks_dir = root / "masks" / name
+            features_dir = root / "features" / name
+
+            config = self.build_config()
+            config.output_dir = str(masks_dir)
+            config.features_dir = str(features_dir)
+            config.to_yaml(config_path)
+
+            print(f"Config '{name}' saved — here's what you chose:\n")
             for line in self._config_recap(config):
                 print(line)
+            print(f"\nConfig    → {config_path}")
+            print(f"Masks     → {masks_dir}/  (the sbatch run creates this)")
+            print(f"Features  → {features_dir}/  (the sbatch run creates this)")
+            print("\nRun batch segmentation (from the repo root) with:")
+            print(f"  sbatch scripts/run_segmentation.sh {config_path}")
 
     def _ipython_display_(self) -> None:
         """Display all four blocks when the object is the last cell expression."""

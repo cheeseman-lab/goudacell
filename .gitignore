@@ -56,6 +56,10 @@ slurm-*.out
 # Generated artifact folders — keep the structure, ignore the contents
 configs/*
 !configs/.gitkeep
+masks/*
+!masks/.gitkeep
+features/*
+!features/.gitkeep
 out/*
 !out/.gitkeep
 !out/logs/

@@ -99,6 +99,7 @@ class SegmentationConfig:
 
     input_dir: str
     output_dir: str
+    features_dir: Optional[str] = None
     file_pattern: str = "*.tif"
     model: str = "cyto3"
     diameter: float = 30.0
@@ -149,6 +150,7 @@ class SegmentationConfig:
         data = {
             "input_dir": self.input_dir,
             "output_dir": self.output_dir,
+            "features_dir": self.features_dir,
             "file_pattern": self.file_pattern,
             "model": self.model,
             "diameter": self.diameter,
@@ -257,7 +259,7 @@ class SegmentationConfig:
         Returns:
             Path for the features CSV file.
         """
-        output_dir = Path(self.output_dir)
+        output_dir = Path(self.features_dir or self.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.feature_extraction and self.feature_extraction.output_path:
@@ -273,7 +275,7 @@ class SegmentationConfig:
         Returns:
             Path for the single combined features CSV.
         """
-        output_dir = Path(self.output_dir)
+        output_dir = Path(self.features_dir or self.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         name = "features_combined.csv"

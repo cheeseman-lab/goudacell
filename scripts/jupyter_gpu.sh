@@ -7,7 +7,7 @@
 #SBATCH --mem=32gb
 #SBATCH --partition=nvidia-A4000-20
 #SBATCH --gres=gpu:1
-#SBATCH --output=goudacell_jupyter-%j.out
+#SBATCH --output=out/logs/goudacell_jupyter-%j.out
 
 # GoudaCell Jupyter Lab SLURM Script
 #

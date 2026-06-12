@@ -44,6 +44,10 @@ dependencies = [
 # Cellpose 3.x - for cyto3, nuclei, cyto2 models (rounded cells)
 cellpose3 = [
     "cellpose==3.1.0",
+    # Pin torch to the cu126 wheel: the fry GPU driver (560.x) supports CUDA 12.6,
+    # so an unpinned torch resolves to cu130 and torch.cuda.is_available() is False.
+    "torch==2.7.0",
+    "torchvision==0.22.0",
 ]
 # Cellpose 4.x - for cpsam model only (requires GPU, better for complex shapes)
 cellpose4 = [

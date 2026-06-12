@@ -20,9 +20,14 @@ goudacell/
 │   ├── features_cp_measure.py  # cp_measure backend
 │   ├── features_cellprofiler.py # CellProfiler headless backend
 │   ├── feature_table_utils.py  # Region property utilities
+│   ├── gpu.py                  # GPU detection / diagnostics
+│   ├── notebook.py             # ipywidgets ParameterUI (notebook front-end)
 │   └── viz.py                  # Visualization utilities
 ├── data/                       # Put test images here
-├── notebooks/                  # Interactive notebook
+├── configs/                    # Generated configs (segmentation_config.yaml)
+├── out/                        # Batch masks + feature tables
+│   └── logs/                   # SLURM .out logs
+├── notebooks/                  # Interactive notebook (thin: ParameterUI)
 └── scripts/                    # SLURM submission scripts
 ```
 

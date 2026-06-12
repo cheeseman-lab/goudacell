@@ -15,6 +15,36 @@ app = typer.Typer(
 console = Console()
 
 
+def _combine_feature_tables(frames):
+    """Concatenate (DataFrame, filename) pairs into one table, filename first."""
+    import pandas as pd
+
+    labeled = [df.assign(filename=name) for df, name in frames]
+    combined = pd.concat(labeled, ignore_index=True)
+    cols = ["filename"] + [c for c in combined.columns if c != "filename"]
+    return combined[cols]
+
+
+def _extract_features_for(fe, image, nuclei_masks, cell_masks):
+    """Run feature extraction for one image using a FeatureExtractionParams."""
+    from goudacell.features import extract_features
+
+    return extract_features(
+        image,
+        nuclei_masks=nuclei_masks,
+        cell_masks=cell_masks,
+        channel_names=fe.channel_names,
+        channels=fe.channels,
+        compartments=fe.compartments,
+        include_texture=fe.include_texture,
+        include_correlation=fe.include_correlation,
+        include_neighbors=fe.include_neighbors,
+        method=fe.method,
+        pipeline_file=fe.pipeline_file,
+        cellprofiler_cmd=fe.cellprofiler_cmd,
+    )
+
+
 @app.command()
 def segment(
     config: Path = typer.Argument(..., help="Path to YAML configuration file"),
@@ -63,6 +93,10 @@ def segment(
                 console.print(f"  {f.name} -> {output.name}")
         return
 
+    fe = cfg.feature_extraction
+    combine = bool(fe and fe.enabled and fe.combine_tables)
+    combined_frames = []
+
     # Process each file
     with Progress(
         SpinnerColumn(),
@@ -107,23 +141,14 @@ def segment(
                     n_cells = len(set(cell_masks.flat)) - 1
 
                     # Feature extraction if enabled
-                    if cfg.feature_extraction and cfg.feature_extraction.enabled:
-                        from goudacell.features import extract_features
-
-                        features_df = extract_features(
-                            image,
-                            nuclei_masks=nuclei_masks,
-                            cell_masks=cell_masks,
-                            channel_names=cfg.feature_extraction.channel_names,
-                            include_texture=cfg.feature_extraction.include_texture,
-                            include_correlation=cfg.feature_extraction.include_correlation,
-                            include_neighbors=cfg.feature_extraction.include_neighbors,
-                            method=cfg.feature_extraction.method,
-                            pipeline_file=cfg.feature_extraction.pipeline_file,
-                            cellprofiler_cmd=cfg.feature_extraction.cellprofiler_cmd,
+                    if fe and fe.enabled:
+                        features_df = _extract_features_for(
+                            fe, image, nuclei_masks, cell_masks
                         )
                         features_path = cfg.get_features_output_path(input_file)
                         features_df.to_csv(features_path, index=False)
+                        if combine:
+                            combined_frames.append((features_df, input_file.name))
                         n_features = len(features_df.columns)
                         progress.update(
                             task,
@@ -159,14 +184,40 @@ def segment(
 
                     n_cells = len(set(masks.flat)) - 1  # Exclude background
                     label = "nuclei" if cfg.mode == "nuclei" else "cells"
-                    progress.update(
-                        task,
-                        description=f"[green]Done[/green] {input_file.name} ({n_cells} {label})",
-                    )
+
+                    # Feature extraction if enabled (single mask as the nucleus compartment)
+                    if fe and fe.enabled:
+                        features_df = _extract_features_for(fe, image, masks, None)
+                        features_path = cfg.get_features_output_path(input_file)
+                        features_df.to_csv(features_path, index=False)
+                        if combine:
+                            combined_frames.append((features_df, input_file.name))
+                        n_features = len(features_df.columns)
+                        progress.update(
+                            task,
+                            description=f"[green]Done[/green] {input_file.name} "
+                            f"({n_cells} {label}, {n_features} features)",
+                        )
+                    else:
+                        progress.update(
+                            task,
+                            description=f"[green]Done[/green] {input_file.name} "
+                            f"({n_cells} {label})",
+                        )
 
             except Exception as e:
                 progress.update(task, description=f"[red]Failed[/red] {input_file.name}: {e}")
                 console.print_exception()
+
+    # Write combined feature table across all files
+    if combine and combined_frames:
+        combined = _combine_feature_tables(combined_frames)
+        combined_path = cfg.get_combined_output_path()
+        combined.to_csv(combined_path, index=False)
+        console.print(
+            f"[green]Wrote combined table[/green] {combined_path} "
+            f"({len(combined)} rows from {len(combined_frames)} files)"
+        )
 
 
 @app.command()
@@ -227,6 +278,12 @@ def version() -> None:
     except ImportError:
         console.print("[yellow]Cellpose not installed[/yellow]")
         console.print("  Install with: uv pip install -e '.[cellpose3]' or '.[cellpose4]'")
+
+    from goudacell.gpu import detect_gpu
+
+    status = detect_gpu()
+    color = "green" if status.available else "yellow"
+    console.print(f"GPU: [{color}]{status.reason}[/{color}]")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,8 @@ def extract_features(
     nuclei_masks: np.ndarray,
     cell_masks: np.ndarray = None,
     channel_names: Optional[List[str]] = None,
+    channels: Optional[List[int]] = None,
+    compartments: Optional[List[str]] = None,
     include_texture: bool = True,
     include_correlation: bool = True,
     include_neighbors: bool = True,
@@ -71,6 +73,12 @@ def extract_features(
             If provided, cytoplasm features will also be extracted.
         channel_names: Names for each channel. If None, defaults to
             ["ch0", "ch1", ...].
+        channels: Channel indices to extract from. If None, all channels are
+            used. When given, the image and channel_names are sliced to these
+            channels before extraction (applies to all backends). Any
+            foci_channel indices then refer to positions within this subset.
+        compartments: Which compartments to measure, any of "nucleus", "cell",
+            "cytoplasm". If None, all available are measured. cp_emulator only.
         include_texture: Whether to include Haralick and PFTAS texture features.
             These are computationally expensive but informative.
         include_correlation: Whether to include channel correlation features
@@ -95,6 +103,30 @@ def extract_features(
         Column prefixes indicate compartment: "nucleus_", "cell_", "cytoplasm_".
         Feature names follow CellProfiler conventions where possible.
     """
+    # Restrict to a subset of channels (applies to all backends)
+    if channels is not None:
+        if image.ndim == 2:
+            image = image[np.newaxis, ...]
+        image = image[channels]
+        if channel_names is not None:
+            # Names may be given for the selected channels (same length) or for
+            # all original channels (then subset by index).
+            if len(channel_names) == len(channels):
+                pass
+            elif len(channel_names) > max(channels):
+                channel_names = [channel_names[i] for i in channels]
+            else:
+                raise ValueError(
+                    f"channel_names has {len(channel_names)} entries; expected "
+                    f"{len(channels)} (one per selected channel) or at least "
+                    f"{max(channels) + 1} (one per original channel)."
+                )
+
+    # Correlation is a between-channel measure — needs at least two channels.
+    n_channels_eff = image.shape[0] if image.ndim == 3 else 1
+    if include_correlation and n_channels_eff < 2:
+        include_correlation = False
+
     # Dispatch to alternative backends
     if method == "cp_measure":
         from goudacell.features_cp_measure import extract_features_cp_measure
@@ -162,47 +194,57 @@ def extract_features(
     features = _build_feature_dict(include_texture, include_correlation)
 
     # Create column mapping for renaming
-    channels = list(range(n_channels))
+    channel_idx = list(range(n_channels))
+
+    # Decide which compartments to measure
+    def want(compartment: str) -> bool:
+        return compartments is None or compartment in compartments
 
     dfs = []
 
     # Extract nucleus features
-    nucleus_columns = _make_column_map(
-        channels, channel_names, include_texture, include_correlation
-    )
-    nucleus_df = _extract_compartment_features(
-        image, nuclei_masks, features, nucleus_columns, "nucleus"
-    )
-    dfs.append(nucleus_df)
+    if want("nucleus"):
+        nucleus_columns = _make_column_map(
+            channel_idx, channel_names, include_texture, include_correlation
+        )
+        nucleus_df = _extract_compartment_features(
+            image, nuclei_masks, features, nucleus_columns, "nucleus"
+        )
+        dfs.append(nucleus_df)
 
     # Extract cell features if masks provided
     if cell_masks is not None and np.sum(cell_masks) > 0:
-        cell_columns = _make_column_map(
-            channels, channel_names, include_texture, include_correlation
-        )
-        cell_df = _extract_compartment_features(image, cell_masks, features, cell_columns, "cell")
-        dfs.append(cell_df)
+        if want("cell"):
+            cell_columns = _make_column_map(
+                channel_idx, channel_names, include_texture, include_correlation
+            )
+            cell_df = _extract_compartment_features(
+                image, cell_masks, features, cell_columns, "cell"
+            )
+            dfs.append(cell_df)
 
         # Extract cytoplasm features (cell - nucleus)
-        cytoplasm_masks = _create_cytoplasm_masks(cell_masks, nuclei_masks)
-        if np.sum(cytoplasm_masks) > 0:
-            cyto_columns = _make_column_map(
-                channels, channel_names, include_texture, include_correlation
-            )
-            cyto_df = _extract_compartment_features(
-                image, cytoplasm_masks, features, cyto_columns, "cytoplasm"
-            )
-            dfs.append(cyto_df)
+        if want("cytoplasm"):
+            cytoplasm_masks = _create_cytoplasm_masks(cell_masks, nuclei_masks)
+            if np.sum(cytoplasm_masks) > 0:
+                cyto_columns = _make_column_map(
+                    channel_idx, channel_names, include_texture, include_correlation
+                )
+                cyto_df = _extract_compartment_features(
+                    image, cytoplasm_masks, features, cyto_columns, "cytoplasm"
+                )
+                dfs.append(cyto_df)
 
     # Extract neighbor measurements
     if include_neighbors:
-        dfs.append(
-            neighbor_measurements(nuclei_masks, distances=[1])
-            .set_index("label")
-            .add_prefix("nucleus_")
-        )
+        if want("nucleus"):
+            dfs.append(
+                neighbor_measurements(nuclei_masks, distances=[1])
+                .set_index("label")
+                .add_prefix("nucleus_")
+            )
 
-        if cell_masks is not None and np.sum(cell_masks) > 0:
+        if want("cell") and cell_masks is not None and np.sum(cell_masks) > 0:
             dfs.append(
                 neighbor_measurements(cell_masks, distances=[1])
                 .set_index("label")
@@ -246,6 +288,8 @@ def extract_features(
             dfs.append(foci_df)
 
     # Concatenate all features
+    if not dfs:
+        return pd.DataFrame(columns=["label"])
     result_df = pd.concat(dfs, axis=1, join="outer", sort=False).reset_index()
 
     # Reorder columns: label first, then nucleus, cell, cytoplasm

@@ -39,9 +39,8 @@ data/*
 *.dv
 *_mask.tif
 
-# Allow test fixture crops
-!tests/data/
-!tests/data/*.tif
+# Tests are kept local-only (not tracked)
+tests/
 
 # SLURM outputs
 *.out
@@ -53,3 +52,12 @@ slurm-*.out
 
 # Generated configs
 *_config.yaml
+
+# Generated artifact folders — keep the structure, ignore the contents
+configs/*
+!configs/.gitkeep
+out/*
+!out/.gitkeep
+!out/logs/
+out/logs/*
+!out/logs/.gitkeep

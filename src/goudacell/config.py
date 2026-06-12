@@ -17,19 +17,31 @@ class FeatureExtractionParams:
             "cp_measure" (requires cp-measure package), or "cellprofiler"
             (requires cellprofiler-core package).
         channel_names: Names for each channel (auto-detected if None).
+        channels: Channel indices to extract from (None = all channels). Use to
+            restrict extraction to specific channels (e.g. [2] for one stain).
+        compartments: Compartments to measure, any of "nucleus", "cell",
+            "cytoplasm" (None = all available). cp_emulator backend only.
         include_texture: Include Haralick/PFTAS texture features (slower).
         include_correlation: Include channel correlation features.
         include_neighbors: Include neighbor measurements.
-        output_path: Output path for features CSV (relative to output_dir).
+        output_path: Per-file output path for features CSV. May contain a
+            "{stem}" placeholder (relative to output_dir).
+        combine_tables: Also write one combined CSV across all input files,
+            with a "filename" column identifying each file's rows.
+        combined_output: Filename for the combined table (relative to output_dir).
     """
 
     enabled: bool = False
     method: Literal["cp_emulator", "cp_measure", "cellprofiler"] = "cp_emulator"
     channel_names: Optional[List[str]] = None
+    channels: Optional[List[int]] = None
+    compartments: Optional[List[str]] = None
     include_texture: bool = True
     include_correlation: bool = True
     include_neighbors: bool = True
     output_path: str = "features.csv"
+    combine_tables: bool = False
+    combined_output: str = "features_combined.csv"
     # CellProfiler headless options (only used when method="cellprofiler")
     pipeline_file: Optional[str] = None
     cellprofiler_cmd: str = "cellprofiler"
@@ -167,18 +179,23 @@ class SegmentationConfig:
 
         # Add feature extraction params if enabled
         if self.feature_extraction is not None:
+            fe = self.feature_extraction
             fe_data = {
-                "enabled": self.feature_extraction.enabled,
-                "method": self.feature_extraction.method,
-                "channel_names": self.feature_extraction.channel_names,
-                "include_texture": self.feature_extraction.include_texture,
-                "include_correlation": self.feature_extraction.include_correlation,
-                "include_neighbors": self.feature_extraction.include_neighbors,
-                "output_path": self.feature_extraction.output_path,
+                "enabled": fe.enabled,
+                "method": fe.method,
+                "channel_names": fe.channel_names,
+                "channels": fe.channels,
+                "compartments": fe.compartments,
+                "include_texture": fe.include_texture,
+                "include_correlation": fe.include_correlation,
+                "include_neighbors": fe.include_neighbors,
+                "output_path": fe.output_path,
+                "combine_tables": fe.combine_tables,
+                "combined_output": fe.combined_output,
             }
-            if self.feature_extraction.method == "cellprofiler":
-                fe_data["pipeline_file"] = self.feature_extraction.pipeline_file
-                fe_data["cellprofiler_cmd"] = self.feature_extraction.cellprofiler_cmd
+            if fe.method == "cellprofiler":
+                fe_data["pipeline_file"] = fe.pipeline_file
+                fe_data["cellprofiler_cmd"] = fe.cellprofiler_cmd
             data["feature_extraction"] = fe_data
 
         with open(yaml_path, "w") as f:
@@ -249,3 +266,17 @@ class SegmentationConfig:
             return output_dir / output_name
         else:
             return output_dir / f"{input_file.stem}_features.csv"
+
+    def get_combined_output_path(self) -> Path:
+        """Get output path for the combined feature table.
+
+        Returns:
+            Path for the single combined features CSV.
+        """
+        output_dir = Path(self.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        name = "features_combined.csv"
+        if self.feature_extraction and self.feature_extraction.combined_output:
+            name = self.feature_extraction.combined_output
+        return output_dir / name

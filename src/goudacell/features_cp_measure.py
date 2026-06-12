@@ -11,7 +11,6 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
-
 from cp_measure.bulk import (
     get_core_measurements,
     get_correlation_measurements,

@@ -248,6 +248,12 @@ class ParameterUI:
         self.remove_edge = widgets.Checkbox(value=False, description="Remove edge cells")
         self.z_project = widgets.Checkbox(value=True, description="Z-project stacks")
         self.gpu = widgets.Checkbox(value=True, description="Use GPU")
+        self.reconcile = widgets.Checkbox(
+            value=True,
+            description="Reconcile nuclei ↔ cells (drop nucleus-less cells)",
+            indent=False,
+            layout=widgets.Layout(width="380px"),
+        )
 
         self.estimate_btn = widgets.Button(
             description="Estimate diameters", icon="ruler", tooltip="Cellpose 3.x only"
@@ -312,6 +318,7 @@ class ParameterUI:
                 widgets.HBox([self.nuclei_box, self.cell_box]),
                 self.help_box,
                 widgets.HBox([self.remove_edge, self.z_project, self.gpu]),
+                self.reconcile,
                 widgets.HBox([self.estimate_btn, self.run_btn]),
                 self.seg_output,
                 widgets.HTML("<hr>"),
@@ -415,7 +422,8 @@ class ParameterUI:
         mode = self.mode_w.value
         self.nuclei_box.layout.display = "" if mode in ("nuclei", "dual") else "none"
         self.cell_box.layout.display = "" if mode in ("cells", "dual") else "none"
-        # Sweep target only matters in dual mode.
+        # Reconcile and sweep target only matter in dual mode.
+        self.reconcile.layout.display = "" if mode == "dual" else "none"
         self.sweep_target.layout.display = "" if mode == "dual" else "none"
 
     def _refresh_images(self) -> None:
@@ -513,6 +521,7 @@ class ParameterUI:
                 channel_to_segment=None,
                 mode="dual",
                 dual=self._dual_params(),
+                reconcile="consensus" if self.reconcile.value else None,
                 **common,
             )
 
@@ -646,6 +655,7 @@ class ParameterUI:
                     cell_cellprob_threshold=self.cell_cellprob.value,
                     gpu=use_gpu,
                     remove_edge_cells=self.remove_edge.value,
+                    reconcile="consensus" if self.reconcile.value else None,
                 )
                 panels = [
                     (self.nuc_channel.value, nuclei, f"Nuclei ({_count(nuclei)})"),
@@ -854,6 +864,10 @@ class ParameterUI:
                 f"  Cells  — channel {d.cyto_channel}, model {d.cell_model}, "
                 f"diameter {d.cell_diameter}, flow {d.cell_flow_threshold}, "
                 f"cellprob {d.cell_cellprob_threshold}"
+            )
+            lines.append(
+                f"  Reconcile — {config.reconcile or 'off'} "
+                f"(drops nucleus-less cells, matches nucleus↔cell labels)"
             )
         else:
             lines.append(

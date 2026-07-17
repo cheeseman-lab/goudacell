@@ -95,6 +95,9 @@ class SegmentationConfig:
         channel_to_segment: Which channel to use (for multi-channel images).
         mode: Segmentation mode ("nuclei", "cells", or "dual").
         dual: Parameters for dual mode (only used if mode="dual").
+        reconcile: Dual-mode reconciliation method matching nuclei to cells and
+            dropping nucleus-less cells ("consensus" or "contained_in_cells").
+            None skips reconciliation. Ignored outside dual mode.
     """
 
     input_dir: str
@@ -112,6 +115,7 @@ class SegmentationConfig:
     channel_to_segment: Optional[int] = None
     mode: Literal["nuclei", "cells", "dual"] = "cells"
     dual: Optional[DualSegmentationParams] = None
+    reconcile: Optional[str] = "consensus"
     feature_extraction: Optional[FeatureExtractionParams] = None
 
     @classmethod
@@ -178,6 +182,7 @@ class SegmentationConfig:
                 "cell_flow_threshold": self.dual.cell_flow_threshold,
                 "cell_cellprob_threshold": self.dual.cell_cellprob_threshold,
             }
+            data["reconcile"] = self.reconcile
 
         # Add feature extraction params if enabled
         if self.feature_extraction is not None:

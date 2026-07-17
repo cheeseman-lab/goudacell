@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
+from skimage.measure import regionprops
 from skimage.segmentation import clear_border
 from skimage.util import img_as_ubyte
 
@@ -158,6 +159,7 @@ def segment_nuclei_and_cells(
     cell_cellprob_threshold: float = 0.0,
     gpu: bool = True,
     remove_edge_cells: bool = True,
+    reconcile: Optional[str] = "consensus",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Segment both nuclei and cells from a multi-channel image.
 
@@ -175,9 +177,13 @@ def segment_nuclei_and_cells(
         cell_cellprob_threshold: Cell prob threshold for cell segmentation.
         gpu: Whether to use GPU.
         remove_edge_cells: Remove cells touching image border.
+        reconcile: Reconciliation method matching nuclei to cells and dropping
+            nucleus-less cells ("consensus" or "contained_in_cells"). Pass None
+            to skip and return the raw, independently-labelled masks.
 
     Returns:
-        Tuple of (nuclei_mask, cell_mask).
+        Tuple of (nuclei_mask, cell_mask). When ``reconcile`` is set, the two
+        masks share labels (a cell and its nucleus have the same integer).
     """
     _validate_model(cell_model)
     _validate_model(nuclei_model)
@@ -227,6 +233,12 @@ def segment_nuclei_and_cells(
         nuclei_masks = clear_border(nuclei_masks)
         cell_masks = clear_border(cell_masks)
 
+    # Match nuclei to cells and drop nucleus-less cells (shared labels out).
+    if reconcile:
+        nuclei_masks, cell_masks = reconcile_nuclei_cells(
+            nuclei_masks, cell_masks, how=reconcile
+        )
+
     return nuclei_masks, cell_masks
 
 
@@ -274,6 +286,116 @@ def _prepare_rgb(
     blue = img_as_ubyte(dapi)
 
     return np.array([red, green, blue])
+
+
+def _center_pixels(label_image: np.ndarray) -> np.ndarray:
+    """Reduce each labelled region to a single pixel at its bounding-box centre.
+
+    Used to test which cell a nucleus belongs to without a large nucleus
+    straddling a cell boundary.
+    """
+    centered = np.zeros_like(label_image)
+    for r in regionprops(label_image):
+        i, j = np.array(r.bbox).reshape(2, 2).mean(axis=0).astype(int)
+        centered[i, j] = r.label
+    return centered
+
+
+def _relabel_array(arr: np.ndarray, new_label_dict: dict) -> np.ndarray:
+    """Map integer values in ``arr`` via ``new_label_dict``; unmapped values -> 0."""
+    n = int(arr.max())
+    lookup = np.zeros(n + 1)
+    for old_val, new_val in new_label_dict.items():
+        if old_val <= n:
+            lookup[old_val] = new_val
+    return lookup[arr]
+
+
+def reconcile_nuclei_cells(
+    nuclei: np.ndarray, cells: np.ndarray, how: str = "consensus"
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Reconcile independently-segmented nuclei and cell masks by overlap.
+
+    Cellpose segments nuclei and cells in separate passes, so their labels do
+    not correspond and some cells contain no nucleus. This matches each nucleus
+    to the cell it sits in, drops nucleus-less cells (and orphan nuclei), and
+    relabels both masks so a cell and its nucleus share one label — the
+    numbering the feature tables rely on to join compartments.
+
+    Ported from brieflow (``lib/shared/segmentation_utils.py``).
+
+    Args:
+        nuclei: Labeled nuclei mask.
+        cells: Labeled cell mask.
+        how: Reconciliation method.
+            - "consensus": keep only pairs whose nucleus<->cell match is mutual
+              and unique (drops cells with 0 or >1 nuclei).
+            - "contained_in_cells": keep every cell containing a nucleus, merging
+              multiple nuclei under the cell's label.
+
+    Returns:
+        Tuple of (nuclei, cells) with matched, consecutive labels. Both are all
+        zeros if no pair survives.
+    """
+
+    def get_unique_label_map(regions, keep_multiple=False):
+        label_map = {}
+        for region in regions:
+            intensity_image = region.intensity_image[region.intensity_image > 0]
+            labels = np.unique(intensity_image)
+            if keep_multiple:
+                label_map[region.label] = labels
+            elif len(labels) == 1:
+                label_map[region.label] = labels[0]
+        return label_map
+
+    # Erode nuclei to their centre pixel so each maps to a single cell.
+    nuclei_eroded = _center_pixels(nuclei)
+
+    nucleus_map = get_unique_label_map(regionprops(nuclei_eroded, intensity_image=cells))
+    if how == "contained_in_cells":
+        cell_map = get_unique_label_map(
+            regionprops(cells, intensity_image=nuclei_eroded), keep_multiple=True
+        )
+    else:
+        cell_map = get_unique_label_map(regionprops(cells, intensity_image=nuclei_eroded))
+
+    # Keep nucleus-cell pairs that agree on each other.
+    keep = []
+    for nucleus in nucleus_map:
+        try:
+            if how == "contained_in_cells":
+                if nucleus in cell_map[nucleus_map[nucleus]]:
+                    keep.append([nucleus, nucleus_map[nucleus]])
+            else:
+                if cell_map[nucleus_map[nucleus]] == nucleus:
+                    keep.append([nucleus, nucleus_map[nucleus]])
+        except KeyError:
+            pass
+
+    if len(keep) == 0:
+        return np.zeros_like(nuclei), np.zeros_like(cells)
+
+    keep_nuclei, keep_cells = zip(*keep)
+
+    if how == "contained_in_cells":
+        nuclei = _relabel_array(
+            nuclei, {nuclei_label: cell_label for nuclei_label, cell_label in keep}
+        )
+        cells[~np.isin(cells, keep_cells)] = 0
+        labels, cell_indices = np.unique(cells, return_inverse=True)
+        _, nuclei_indices = np.unique(nuclei, return_inverse=True)
+        cells = np.arange(0, labels.shape[0])[cell_indices.reshape(*cells.shape)]
+        nuclei = np.arange(0, labels.shape[0])[nuclei_indices.reshape(*nuclei.shape)]
+    else:
+        nuclei = _relabel_array(
+            nuclei, {label: i + 1 for i, label in enumerate(keep_nuclei)}
+        )
+        cells = _relabel_array(
+            cells, {label: i + 1 for i, label in enumerate(keep_cells)}
+        )
+
+    return nuclei.astype(int), cells.astype(int)
 
 
 # Parameters that can be swept, mapped to the attribute suffix they override.

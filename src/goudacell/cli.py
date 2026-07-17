@@ -127,6 +127,7 @@ def segment(
                         cell_cellprob_threshold=cfg.dual.cell_cellprob_threshold,
                         gpu=cfg.gpu,
                         remove_edge_cells=cfg.remove_edge_cells,
+                        reconcile=cfg.reconcile,
                     )
 
                     # Save both outputs

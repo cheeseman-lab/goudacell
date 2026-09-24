@@ -27,6 +27,7 @@ def _combine_feature_tables(frames):
 
 def _extract_features_for(fe, image, nuclei_masks, cell_masks):
     """Run feature extraction for one image using a FeatureExtractionParams."""
+    from goudacell.custom_features import load_custom_features
     from goudacell.features import extract_features
 
     return extract_features(
@@ -39,9 +40,73 @@ def _extract_features_for(fe, image, nuclei_masks, cell_masks):
         include_texture=fe.include_texture,
         include_correlation=fe.include_correlation,
         include_neighbors=fe.include_neighbors,
+        foci_channel=fe.foci_channel,
         method=fe.method,
         pipeline_file=fe.pipeline_file,
         cellprofiler_cmd=fe.cellprofiler_cmd,
+        custom_features=load_custom_features(fe.custom_features),
+    )
+
+
+def _full_channel_names(fe, image):
+    """Channel names for every channel of ``image`` (secondary objects use them all)."""
+    n_channels = image.shape[0] if image.ndim == 3 else 1
+    if fe.channel_names is not None and len(fe.channel_names) == n_channels:
+        return list(fe.channel_names)
+    return [f"ch{i}" for i in range(n_channels)]
+
+
+def _second_obj_foci_channel(fe):
+    """Map the feature foci channel to a full-image index for secondary objects."""
+    fc = fe.foci_channel
+    if isinstance(fc, list):
+        if len(fc) != 1:
+            raise ValueError("Secondary-object foci take a single foci channel (as brieflow)")
+        fc = fc[0]
+    if fc is not None and fe.channels:
+        fc = fe.channels[fc]
+    return fc
+
+
+def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
+    """Detect secondary objects as brieflow's identify_second_objs rule.
+
+    Args:
+        image: Multichannel image (C, H, W).
+        nuclei_masks: Reconciled nuclei mask (centroids for nucleus distances).
+        cell_masks: Reconciled cell mask.
+        params: SecondaryObjectParams.
+        gpu: Whether the ML methods may use the GPU.
+
+    Returns:
+        Tuple of (second_obj_masks, cell_second_obj_table, updated_cytoplasm_masks).
+    """
+    from skimage.measure import regionprops
+
+    from goudacell.secondary_objects import segment_second_objs_from_config
+    from goudacell.segment import identify_cytoplasm
+
+    centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
+    return segment_second_objs_from_config(
+        image=image,
+        cell_masks=cell_masks,
+        cytoplasm_masks=identify_cytoplasm(nuclei_masks, cell_masks),
+        second_obj_params=params.to_brieflow_params(gpu),
+        nuclei_centroids=centroids,
+    )
+
+
+def extract_second_obj_features(fe, image, second_obj_masks, second_obj_table):
+    """Per-object secondary-object features, as brieflow's extract_phenotype_second_objs."""
+    from goudacell.features_second_objs import extract_phenotype_second_objs
+
+    return extract_phenotype_second_objs(
+        image,
+        second_objs=second_obj_masks,
+        wildcards={},
+        second_obj_cell_mapping_df=second_obj_table["second_obj_cell_mapping"],
+        foci_channel=_second_obj_foci_channel(fe),
+        channel_names=_full_channel_names(fe, image),
     )
 
 
@@ -52,9 +117,10 @@ def segment(
 ) -> None:
     """Run batch segmentation using a YAML config file."""
     from goudacell.config import SegmentationConfig
+    from goudacell.features import add_num_nuclei, merge_second_obj_summary
     from goudacell.io import load_image, save_mask
     from goudacell.segment import segment as run_segment
-    from goudacell.segment import segment_nuclei_and_cells
+    from goudacell.segment import segment_nuclei, segment_nuclei_and_cells
 
     # Load config
     cfg = SegmentationConfig.from_yaml(config)
@@ -96,6 +162,9 @@ def segment(
     fe = cfg.feature_extraction
     combine = bool(fe and fe.enabled and fe.combine_tables)
     combined_frames = []
+    combined_second_obj_frames = []
+    so = cfg.secondary_objects
+    detect_second_objs = bool(cfg.mode == "dual" and so and so.second_obj_detection)
 
     # Process each file
     with Progress(
@@ -113,7 +182,7 @@ def segment(
 
                 if cfg.mode == "dual" and cfg.dual:
                     # Dual mode: segment nuclei and cells
-                    nuclei_masks, cell_masks = segment_nuclei_and_cells(
+                    nuclei_masks, cell_masks, nuclei_per_cell = segment_nuclei_and_cells(
                         image,
                         nuclei_channel=cfg.dual.nuclei_channel,
                         cyto_channel=cfg.dual.cyto_channel,
@@ -128,12 +197,20 @@ def segment(
                         gpu=cfg.gpu,
                         remove_edge_cells=cfg.remove_edge_cells,
                         reconcile=cfg.reconcile,
+                        helper_channel=cfg.dual.helper_channel,
+                        return_nuclei_per_cell=True,
                     )
 
                     # Save both outputs
                     nuclei_path, cell_path = cfg.get_dual_output_paths(input_file)
                     save_mask(nuclei_masks, nuclei_path)
                     save_mask(cell_masks, cell_path)
+
+                    if detect_second_objs:
+                        second_obj_masks, second_obj_table, _ = segment_second_objects(
+                            image, nuclei_masks, cell_masks, so, cfg.gpu
+                        )
+                        save_mask(second_obj_masks, cfg.get_second_obj_output_path(input_file))
 
                     n_nuclei = len(set(nuclei_masks.flat)) - 1
                     n_cells = len(set(cell_masks.flat)) - 1
@@ -143,6 +220,21 @@ def segment(
                         features_df = _extract_features_for(
                             fe, image, nuclei_masks, cell_masks
                         )
+                        features_df = add_num_nuclei(features_df, nuclei_per_cell)
+                        if detect_second_objs:
+                            features_df = merge_second_obj_summary(
+                                features_df, second_obj_table["cell_summary"]
+                            )
+                            second_obj_df = extract_second_obj_features(
+                                fe, image, second_obj_masks, second_obj_table
+                            )
+                            second_obj_df.to_csv(
+                                cfg.get_second_obj_features_output_path(input_file), index=False
+                            )
+                            if combine:
+                                combined_second_obj_frames.append(
+                                    (second_obj_df, input_file.name)
+                                )
                         features_path = cfg.get_features_output_path(input_file)
                         features_df.to_csv(features_path, index=False)
                         if combine:
@@ -171,16 +263,29 @@ def segment(
                     if cfg.channel_to_segment is not None and image.ndim == 3:
                         seg_image = image[cfg.channel_to_segment]
 
-                    masks = run_segment(
-                        seg_image,
-                        diameter=cfg.diameter,
-                        model=model,
-                        channels=cfg.channels,
-                        flow_threshold=cfg.flow_threshold,
-                        cellprob_threshold=cfg.cellprob_threshold,
-                        gpu=cfg.gpu,
-                        remove_edge_cells=cfg.remove_edge_cells,
-                    )
+                    if cfg.mode == "nuclei":
+                        # brieflow segment_cells=false: DAPI normalised as in dual mode
+                        masks = segment_nuclei(
+                            seg_image,
+                            nuclei_channel=0,
+                            nuclei_diameter=cfg.diameter,
+                            model=model,
+                            flow_threshold=cfg.flow_threshold,
+                            cellprob_threshold=cfg.cellprob_threshold,
+                            gpu=cfg.gpu,
+                            remove_edge_cells=cfg.remove_edge_cells,
+                        )
+                    else:
+                        masks = run_segment(
+                            seg_image,
+                            diameter=cfg.diameter,
+                            model=model,
+                            channels=cfg.channels,
+                            flow_threshold=cfg.flow_threshold,
+                            cellprob_threshold=cfg.cellprob_threshold,
+                            gpu=cfg.gpu,
+                            remove_edge_cells=cfg.remove_edge_cells,
+                        )
 
                     # Save output
                     output_path = cfg.get_output_path(input_file)
@@ -192,6 +297,8 @@ def segment(
                     # Feature extraction if enabled (single mask as the nucleus compartment)
                     if fe and fe.enabled:
                         features_df = _extract_features_for(fe, image, masks, None)
+                        if cfg.mode == "nuclei":
+                            features_df = add_num_nuclei(features_df, {})
                         features_path = cfg.get_features_output_path(input_file)
                         features_df.to_csv(features_path, index=False)
                         if combine:
@@ -222,6 +329,12 @@ def segment(
             f"[green]Wrote combined table[/green] {combined_path} "
             f"({len(combined)} rows from {len(combined_frames)} files)"
         )
+    if combine and combined_second_obj_frames:
+        combined = _combine_feature_tables(combined_second_obj_frames)
+        combined_path = cfg.get_combined_output_path()
+        combined_path = combined_path.with_name(f"{combined_path.stem}_second_objs.csv")
+        combined.to_csv(combined_path, index=False)
+        console.print(f"[green]Wrote combined secondary-object table[/green] {combined_path}")
 
 
 @app.command()

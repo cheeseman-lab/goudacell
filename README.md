@@ -5,7 +5,9 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 ## Features
 
 - **Segmentation modes**: nuclei-only, cells-only, or dual (both)
-- **Feature extraction**: CellProfiler-equivalent morphological and intensity features
+- **Secondary objects**: detect objects inside cells (pathogens, organelles) by thresholding or Cellpose
+- **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
+- **Brieflow parity**: same masks and features as [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype step for the same parameters
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
 - **Cellpose 3 & 4**: Supports both versions with automatic model selection
 
@@ -105,7 +107,12 @@ Extract CellProfiler-equivalent features from segmented images (~100+ features p
 - **Distribution**: radial intensity distribution
 - **Correlation**: channel correlation, colocalization metrics
 - **Neighbors**: counts, distances, angles
-- **Foci**: count and area per channel (optional)
+- **Foci**: count and area per channel (optional, `feature_extraction.foci_channel`)
+- **Custom**: your own per-cell measurements (`ui.set_custom_features([...])` in the notebook)
+
+With secondary-object detection on (dual mode), each image also gets a
+`*_second_obj_mask.tif`, a per-object `*_second_obj_features.csv`, and per-cell object
+counts/areas merged into the main feature table.
 
 ## Which Cellpose Version?
 
@@ -113,6 +120,8 @@ Extract CellProfiler-equivalent features from segmented images (~100+ features p
 |---------|--------------|---------|
 | Cellpose 3 | `.[cellpose3]` | Round cells (most common) |
 | Cellpose 4 | `.[cellpose4]` | Irregular/complex shapes |
+
+Either version also accepts a path to a custom trained model in place of a model name.
 
 ## File Formats Supported
 

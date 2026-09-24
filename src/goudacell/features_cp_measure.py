@@ -17,6 +17,8 @@ from cp_measure.bulk import (
     get_multimask_measurements,
 )
 
+from goudacell.segment import identify_cytoplasm
+
 
 def _dict_to_df(features: dict) -> pd.DataFrame:
     """Convert a measurement dict to DataFrame, handling mixed scalar/array values.
@@ -70,7 +72,7 @@ def _get_single_object_features(
         try:
             features = measure_func(mask, image)
             if prefix:
-                features = {f"{prefix}{k}": v for k, v in features.items()}
+                features = {f"{prefix}_{k}": v for k, v in features.items()}
             results.update(features)
         except Exception as e:
             print(f"Warning: Error in {name}: {e}")
@@ -99,7 +101,7 @@ def _get_colocalization_features(
         try:
             features = measure_func(image1, image2, mask)
             if prefix:
-                features = {f"{prefix}{k}": v for k, v in features.items()}
+                features = {f"{prefix}_{k}": v for k, v in features.items()}
             results.update(features)
         except Exception as e:
             print(f"Warning: Error in colocalization {name}: {e}")
@@ -126,7 +128,7 @@ def _get_neighbor_features(
         try:
             features = measure_func(mask1, mask2)
             if prefix:
-                features = {f"{prefix}{k}": v for k, v in features.items()}
+                features = {f"{prefix}_{k}": v for k, v in features.items()}
             results.update(features)
         except Exception as e:
             print(f"Warning: Error in neighbor {name}: {e}")
@@ -175,8 +177,7 @@ def extract_features_cp_measure(
     # Build cytoplasm masks
     cytoplasm_masks = None
     if cell_masks is not None and np.sum(cell_masks) > 0:
-        cytoplasm_masks = cell_masks.copy()
-        cytoplasm_masks[nuclei_masks > 0] = 0
+        cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks)
 
     all_features = []
 
@@ -219,8 +220,8 @@ def extract_features_cp_measure(
     if include_neighbors:
         for mask, prefix in [
             (nuclei_masks, "nucleus"),
-            (cell_masks, "cell"),
             (cytoplasm_masks, "cytoplasm"),
+            (cell_masks, "cell"),
         ]:
             if mask is not None and np.any(mask > 0):
                 features = _get_neighbor_features(mask, mask, f"{prefix}_neighbor__")

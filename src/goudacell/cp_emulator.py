@@ -173,7 +173,7 @@ GRANULARITY_LENGTH = 16
 EDGE_CONNECTIVITY = 2
 
 intensity_features = {
-    "int": lambda r: r.intensity_image[r.image].sum(),
+    "integrated": lambda r: r.intensity_image[r.image].sum(),
     "mean": lambda r: r.intensity_image[r.image].mean(),
     "std": lambda r: np.std(r.intensity_image[r.image]),
     "max": lambda r: r.intensity_image[r.image].max(),
@@ -199,7 +199,7 @@ intensity_features = {
 }
 
 intensity_features_ch = {
-    "int": lambda r, ch: r.intensity_image_full[ch, r.image].sum(),
+    "integrated": lambda r, ch: r.intensity_image_full[ch, r.image].sum(),
     "mean": lambda r, ch: r.intensity_image_full[ch, r.image].mean(),
     "std": lambda r, ch: np.std(r.intensity_image_full[ch, r.image]),
     "max": lambda r, ch: r.intensity_image_full[ch, r.image].max(),
@@ -226,7 +226,7 @@ intensity_features_ch = {
 }
 
 intensity_features_multichannel = {
-    "int": lambda r: r.intensity_image[r.image, ...].sum(axis=0),
+    "integrated": lambda r: r.intensity_image[r.image, ...].sum(axis=0),
     "mean": lambda r: r.intensity_image[r.image, ...].mean(axis=0),
     "std": lambda r: np.std(r.intensity_image[r.image, ...], axis=0),
     "max": lambda r: r.intensity_image[r.image, ...].max(axis=0),
@@ -257,7 +257,7 @@ intensity_features_multichannel = {
 }
 
 intensity_columns = {
-    "edge_intensity_feature_0": "int_edge",
+    "edge_intensity_feature_0": "integrated_edge",
     "edge_intensity_feature_1": "mean_edge",
     "edge_intensity_feature_2": "std_edge",
     "edge_intensity_feature_3": "max_edge",
@@ -269,7 +269,7 @@ intensity_columns = {
 }
 
 intensity_columns_ch = {
-    "{channel}_edge_intensity_feature_0": "{channel}_int_edge",
+    "{channel}_edge_intensity_feature_0": "{channel}_integrated_edge",
     "{channel}_edge_intensity_feature_1": "{channel}_mean_edge",
     "{channel}_edge_intensity_feature_2": "{channel}_std_edge",
     "{channel}_edge_intensity_feature_3": "{channel}_max_edge",
@@ -281,7 +281,7 @@ intensity_columns_ch = {
 }
 
 intensity_columns_multichannel = {
-    "int": ["int"],
+    "integrated": ["integrated"],
     "mean": ["mean"],
     "std": ["std"],
     "max": ["max"],
@@ -292,7 +292,7 @@ intensity_columns_multichannel = {
     "mad": ["mad"],
     "upper_quartile": ["upper_quartile"],
     "edge_intensity_feature": [
-        "int_edge",
+        "integrated_edge",
         "mean_edge",
         "std_edge",
         "max_edge",

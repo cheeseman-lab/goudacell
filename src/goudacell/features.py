@@ -13,11 +13,11 @@ from typing import List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from goudacell.constants import DEFAULT_METADATA_COLS
 from goudacell.cp_emulator import (
     correlation_columns_multichannel,
     correlation_features_multichannel,
     find_foci,
-    foci_columns,
     foci_features,
     grayscale_columns_multichannel,
     grayscale_features_multichannel,
@@ -29,7 +29,9 @@ from goudacell.cp_emulator import (
     shape_columns,
     shape_features,
 )
-from goudacell.feature_table_utils import feature_table, feature_table_multichannel
+from goudacell.feature_extraction import extract_features_bare
+from goudacell.feature_table_utils import feature_table_multichannel
+from goudacell.segment import identify_cytoplasm
 
 # Basic features added to all feature extractions
 FEATURES_BASIC = {
@@ -37,6 +39,7 @@ FEATURES_BASIC = {
     "i": lambda r: r.centroid[0],
     "j": lambda r: r.centroid[1],
     "label": lambda r: r.label,
+    "bounds": lambda r: r.bbox,
 }
 
 
@@ -55,6 +58,7 @@ def extract_features(
     method: str = "cp_emulator",
     pipeline_file: Optional[str] = None,
     cellprofiler_cmd: str = "cellprofiler",
+    custom_features: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Extract CellProfiler-equivalent features from segmented image.
 
@@ -70,7 +74,9 @@ def extract_features(
         nuclei_masks: Labeled segmentation mask for nuclei (H, W). Each unique
             integer > 0 represents a distinct nucleus.
         cell_masks: Optional labeled segmentation mask for whole cells (H, W).
-            If provided, cytoplasm features will also be extracted.
+            If provided, cytoplasm features are also extracted, on each cell minus its
+            same-label nucleus (:func:`goudacell.segment.identify_cytoplasm`); masks
+            that are not reconciled yield no cytoplasm, as in brieflow.
         channel_names: Names for each channel. If None, defaults to
             ["ch0", "ch1", ...].
         channels: Channel indices to extract from. If None, all channels are
@@ -92,17 +98,26 @@ def extract_features(
         foci_params: Optional dict of parameters for foci detection:
             - radius: Disk radius for white tophat filter (default: 3)
             - threshold: Threshold for foci detection (default: 10)
-            - remove_border_foci: Remove foci touching border (default: False)
+            - remove_border_foci: Remove foci touching border (default: True, as brieflow)
         method: Extraction backend. One of "cp_emulator", "cp_measure",
             or "cellprofiler".
         pipeline_file: Path to .cppipe file (cellprofiler method only).
         cellprofiler_cmd: CellProfiler executable (cellprofiler method only).
+        custom_features: Per-compartment custom features as returned by
+            :func:`goudacell.custom_features.load_custom_features`, each measured on
+            the full multichannel image (channel order of the input). cp_emulator only.
 
     Returns:
         DataFrame with one row per cell and columns for each extracted feature.
         Column prefixes indicate compartment: "nucleus_", "cell_", "cytoplasm_".
         Feature names follow CellProfiler conventions where possible.
     """
+    if custom_features and method != "cp_emulator":
+        raise ValueError("Custom features require method 'cp_emulator'")
+
+    # Custom features always measure the full image, in its original channel order
+    full_image = image[np.newaxis, ...] if image.ndim == 2 else image
+
     # Restrict to a subset of channels (applies to all backends)
     if channels is not None:
         if image.ndim == 2:
@@ -200,69 +215,36 @@ def extract_features(
     def want(compartment: str) -> bool:
         return compartments is None or compartment in compartments
 
+    has_cells = cell_masks is not None and np.sum(cell_masks) > 0
+    cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks) if has_cells else None
+    has_cytoplasm = cytoplasm_masks is not None and np.sum(cytoplasm_masks) > 0
+
+    # Blocks are appended in brieflow's order so the final column order matches
     dfs = []
 
-    # Extract nucleus features
-    if want("nucleus"):
-        nucleus_columns = _make_column_map(
-            channel_idx, channel_names, include_texture, include_correlation
-        )
-        nucleus_df = _extract_compartment_features(
-            image, nuclei_masks, features, nucleus_columns, "nucleus"
-        )
-        dfs.append(nucleus_df)
-
-    # Extract cell features if masks provided
-    if cell_masks is not None and np.sum(cell_masks) > 0:
-        if want("cell"):
-            cell_columns = _make_column_map(
+    for compartment, masks, present in (
+        ("nucleus", nuclei_masks, True),
+        ("cell", cell_masks, has_cells),
+        ("cytoplasm", cytoplasm_masks, has_cytoplasm),
+    ):
+        if present and want(compartment):
+            columns = _make_column_map(
                 channel_idx, channel_names, include_texture, include_correlation
             )
-            cell_df = _extract_compartment_features(
-                image, cell_masks, features, cell_columns, "cell"
-            )
-            dfs.append(cell_df)
-
-        # Extract cytoplasm features (cell - nucleus)
-        if want("cytoplasm"):
-            cytoplasm_masks = _create_cytoplasm_masks(cell_masks, nuclei_masks)
-            if np.sum(cytoplasm_masks) > 0:
-                cyto_columns = _make_column_map(
-                    channel_idx, channel_names, include_texture, include_correlation
-                )
-                cyto_df = _extract_compartment_features(
-                    image, cytoplasm_masks, features, cyto_columns, "cytoplasm"
-                )
-                dfs.append(cyto_df)
-
-    # Extract neighbor measurements
-    if include_neighbors:
-        if want("nucleus"):
             dfs.append(
-                neighbor_measurements(nuclei_masks, distances=[1])
-                .set_index("label")
-                .add_prefix("nucleus_")
-            )
-
-        if want("cell") and cell_masks is not None and np.sum(cell_masks) > 0:
-            dfs.append(
-                neighbor_measurements(cell_masks, distances=[1])
-                .set_index("label")
-                .add_prefix("cell_")
+                _extract_compartment_features(image, masks, features, columns, compartment)
             )
 
     # Extract foci features if foci channel is provided
     if foci_channel is not None:
         # Use cells if available, otherwise fall back to nuclei
-        foci_mask = (
-            cell_masks if (cell_masks is not None and np.sum(cell_masks) > 0) else nuclei_masks
-        )
+        foci_mask = cell_masks if has_cells else nuclei_masks
 
         # Get foci detection parameters
         params = foci_params or {}
         radius = params.get("radius", 3)
         threshold = params.get("threshold", 10)
-        remove_border = params.get("remove_border_foci", False)
+        remove_border = params.get("remove_border_foci", True)
 
         # Normalize to list for consistent handling
         if isinstance(foci_channel, int):
@@ -279,20 +261,67 @@ def extract_features(
             )
 
             # Extract foci features using the cell/nuclei masks as regions
-            foci_df = feature_table(foci_labeled, foci_mask, foci_features)
+            dfs.append(
+                extract_features_bare(foci_labeled, foci_mask, features=foci_features)
+                .set_index("label")
+                .add_prefix(f"cell_{channel_names[fc]}_")
+            )
 
-            # Rename columns with channel name prefix
-            ch_name = channel_names[fc] if channel_names else f"ch{fc}"
-            foci_column_map = {feat: f"{ch_name}_{col[0]}" for feat, col in foci_columns.items()}
-            foci_df = foci_df.rename(columns=foci_column_map).set_index("label").add_prefix("cell_")
-            dfs.append(foci_df)
+    # Extract neighbor measurements
+    if include_neighbors:
+        for compartment, masks, present in (
+            ("nucleus", nuclei_masks, True),
+            ("cell", cell_masks, has_cells),
+            ("cytoplasm", cytoplasm_masks, has_cytoplasm),
+        ):
+            if present and want(compartment):
+                dfs.append(
+                    neighbor_measurements(masks, distances=[1])
+                    .set_index("label")
+                    .add_prefix(f"{compartment}_")
+                )
+
+    # Extract custom features on the compartment each one declares
+    if custom_features:
+        custom_masks = {"nucleus": nuclei_masks, "cell": cell_masks, "cytoplasm": cytoplasm_masks}
+
+        unknown = sorted(set(custom_features) - set(custom_masks))
+        if unknown:
+            raise ValueError(f"Custom features declare unknown compartments: {unknown}")
+
+        for compartment, custom_mask in custom_masks.items():
+            compartment_features = custom_features.get(compartment)
+            if not compartment_features:
+                continue
+
+            # A compartment that was never segmented cannot stand in for another one
+            if custom_mask is None:
+                raise ValueError(
+                    f"Custom features {sorted(compartment_features)} are measured on "
+                    f"the {compartment} compartment, which is not segmented in this run"
+                )
+            if np.sum(custom_mask) == 0:
+                continue
+
+            custom_df = extract_features_bare(
+                full_image, custom_mask, features=compartment_features, multichannel=True
+            ).set_index("label")
+
+            collisions = [
+                col for col in custom_df.columns if any(col in df.columns for df in dfs)
+            ]
+            if collisions:
+                raise ValueError(
+                    f"Custom feature columns collide with built-in features: {collisions}"
+                )
+            dfs.append(custom_df)
 
     # Concatenate all features
     if not dfs:
         return pd.DataFrame(columns=["label"])
     result_df = pd.concat(dfs, axis=1, join="outer", sort=False).reset_index()
 
-    # Reorder columns: label first, then nucleus, cell, cytoplasm
+    # Reorder columns: label, metadata, then nucleus, cell, cytoplasm (brieflow order)
     result_df = _order_columns(result_df)
 
     return result_df
@@ -310,10 +339,11 @@ def _build_feature_dict(include_texture: bool, include_correlation: bool) -> dic
         features.update(intensity_features_multichannel)
         features.update(intensity_distribution_features_multichannel)
 
-    features.update(shape_features)
-
+    # Correlation before shape, as brieflow, so the column order matches
     if include_correlation:
         features.update(correlation_features_multichannel)
+
+    features.update(shape_features)
 
     return features
 
@@ -389,51 +419,63 @@ def _extract_compartment_features(
     return df
 
 
-def _create_cytoplasm_masks(cell_masks: np.ndarray, nuclei_masks: np.ndarray) -> np.ndarray:
-    """Create cytoplasm masks by subtracting nuclei from cells.
+def _order_columns(
+    df: pd.DataFrame, metadata_cols: Optional[List[str]] = None, label_col: str = "label"
+) -> pd.DataFrame:
+    """Order columns as brieflow's ``order_dataframe_columns``.
 
-    Args:
-        cell_masks: Labeled cell segmentation mask.
-        nuclei_masks: Labeled nuclei segmentation mask.
-
-    Returns:
-        Labeled cytoplasm masks where each cell's cytoplasm has the same
-        label as the parent cell.
+    Label first, then the metadata columns present (``DEFAULT_METADATA_COLS``), then any
+    other columns, then nucleus, cell and cytoplasm features, each in insertion order.
     """
-    cytoplasm = cell_masks.copy()
-    cytoplasm[nuclei_masks > 0] = 0
-    return cytoplasm
+    if metadata_cols is None:
+        metadata_cols = DEFAULT_METADATA_COLS
 
+    ordered_cols = [label_col] if label_col in df.columns else []
+    ordered_cols += [c for c in metadata_cols if c in df.columns and c not in ordered_cols]
 
-def _order_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Order DataFrame columns: label, nucleus features, cell features, cytoplasm features."""
-    ordered_cols = []
-
-    # Label first
-    if "label" in df.columns:
-        ordered_cols.append("label")
-
-    # Get remaining columns
     remaining = [col for col in df.columns if col not in ordered_cols]
-
-    # Group by compartment
-    nucleus_cols = sorted([col for col in remaining if col.startswith("nucleus_")])
-    cell_cols = sorted([col for col in remaining if col.startswith("cell_")])
-    cytoplasm_cols = sorted([col for col in remaining if col.startswith("cytoplasm_")])
-    other_cols = sorted(
-        [
-            col
-            for col in remaining
-            if not any(col.startswith(p) for p in ["nucleus_", "cell_", "cytoplasm_"])
-        ]
-    )
-
-    ordered_cols.extend(other_cols)
-    ordered_cols.extend(nucleus_cols)
-    ordered_cols.extend(cell_cols)
-    ordered_cols.extend(cytoplasm_cols)
+    prefixes = ("nucleus_", "cell_", "cytoplasm_")
+    ordered_cols += [col for col in remaining if not col.startswith(prefixes)]
+    for prefix in prefixes:
+        ordered_cols += [col for col in remaining if col.startswith(prefix)]
 
     return df[ordered_cols]
+
+
+def add_num_nuclei(df: pd.DataFrame, nuclei_per_cell: dict) -> pd.DataFrame:
+    """Attach the per-cell nuclei count, defaulting to 1 where a cell has no entry.
+
+    Mirrors brieflow's ``extract_phenotype.py`` (``num_nuclei`` column).
+
+    Args:
+        df: Feature table with a ``label`` column.
+        nuclei_per_cell: ``{cell_label: n_nuclei}`` from segmentation (may be empty).
+
+    Returns:
+        The table with a ``num_nuclei`` column.
+    """
+    labels = df["label"] if "label" in df else pd.Series(dtype=int)
+    df["num_nuclei"] = labels.map(pd.Series(nuclei_per_cell, dtype=float)).fillna(1).astype(int)
+    return df
+
+
+def merge_second_obj_summary(df: pd.DataFrame, cell_summary: pd.DataFrame) -> pd.DataFrame:
+    """Merge the secondary-object cell summary into the per-cell feature table.
+
+    Mirrors brieflow's ``merge_second_objs_phenotype_cp.py``: a left merge on
+    ``label`` = ``cell_id``, dropping ``cell_id``.
+
+    Args:
+        df: Per-cell feature table with a ``label`` column.
+        cell_summary: The ``cell_summary`` table from secondary-object segmentation.
+
+    Returns:
+        The merged table.
+    """
+    if len(df) == 0 or len(cell_summary) == 0:
+        return df
+    merged = df.merge(cell_summary, left_on="label", right_on="cell_id", how="left")
+    return merged.drop("cell_id", axis=1)
 
 
 def get_feature_categories() -> dict:

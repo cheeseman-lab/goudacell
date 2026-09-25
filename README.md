@@ -114,6 +114,32 @@ With secondary-object detection on (dual mode), each image also gets a
 `*_second_obj_mask.tif`, a per-object `*_second_obj_features.csv`, and per-cell object
 counts/areas merged into the main feature table.
 
+### CellProfiler backend (headless)
+
+`feature_extraction.method: cellprofiler` runs your own CellProfiler pipeline headless on
+each image's masks instead of the built-in extractor. CellProfiler lives in its own env
+(it needs Python 3.9 and Java); goudacell calls its executable as a subprocess:
+
+```bash
+conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
+# then in the config (or the notebook's "CP command" / "CP pipeline" fields):
+#   cellprofiler_cmd: /path/to/miniconda3/envs/cellprofiler/bin/cellprofiler
+#   pipeline_file: /path/to/measure.cppipe
+```
+
+For each image goudacell writes one input folder with every channel as `<channel name>.tif`
+(the `channel_names`) and the masks as `nuclei_mask.tif`, `cell_mask.tif` and
+`cytoplasm_mask.tif`, then runs `cellprofiler -c -r -p <pipeline> -i <input> -o <output>`.
+Build the pipeline in the CellProfiler GUI on such a folder: in NamesAndTypes assign each
+channel file as a grayscale image and the masks as **Objects** named `Nuclei`, `Cells` and
+`Cytoplasm`; add the Measure modules you want; end with ExportToSpreadsheet (CSV, one file
+per object). goudacell joins those three object tables on the mask `label`, with columns
+`nucleus_`/`cell_`/`cytoplasm_` + CellProfiler's names (e.g. `cell_Intensity_MeanIntensity_GFP`,
+intensities scaled to 0–1). A pipeline that loads a mask the mode doesn't produce (e.g.
+`Cells` in nuclei mode) finds no image set and fails with the list of staged files.
+`tests/test_cellprofiler_backend.py` holds a minimal working pipeline; run it with
+`GOUDACELL_CELLPROFILER=<env>/bin/cellprofiler pytest tests/test_cellprofiler_backend.py`.
+
 ## Which Cellpose Version?
 
 | Version | Install with | Use for |

@@ -43,7 +43,7 @@ uv pip install -e ".[cellpose3]"
 1. **Cellpose Version Detection**: Auto-detects version and validates model compatibility
 2. **Notebook generates configs**: No manual YAML editing needed
 3. **File Format Support**: ND2 (`nd2`), TIFF (`tifffile`), DV (`mrc`), OME-Zarr (`zarr`/`ome-zarr`)
-4. **Three extraction backends**: `cp_emulator` and `cp_measure` (brieflow's, vendored), `cellprofiler` (headless CP-core)
+4. **Three extraction backends**: `cp_emulator` and `cp_measure` (brieflow's, vendored), `cellprofiler` (a user `.cppipe` run headless by a CellProfiler CLI in its own env)
 5. **Zarr v3 / OME-NGFF v0.5**: Follows brieflow zarr3 patterns with pyramid generation
 
 ## CLI Commands
@@ -57,7 +57,7 @@ goudacell version                  # Check versions
 ## TODOs
 
 - [x] Swap to zarr — OME-Zarr v3 read/write in io.py (zarr, ome-zarr, dask deps)
-- [x] CellProfiler headless — cellprofiler-core backend in features_cellprofiler.py
+- [x] CellProfiler headless — CLI subprocess backend in features_cellprofiler.py
 - [x] CPmeasure — cp_measure backend in features_cp_measure.py
 - [ ] Subcellular embeddings — Extract embeddings from subcellular compartments (integrate last)
 
@@ -114,10 +114,28 @@ Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the ph
 (`GOUDACELL_PARITY_CHANNELS="3,1"` its DAPI and cytoplasm channels); the cp_measure test needs
 `.[cp_measure]`.
 
+## CellProfiler backend
+
+`features_cellprofiler.py` stages `<channel>.tif` + `nuclei_mask.tif`/`cell_mask.tif`/
+`cytoplasm_mask.tif` (relabeled 1..n so CellProfiler's `ObjectNumber` maps back to the mask
+label), runs `cellprofiler -c -r -p -i -o -t` in a non-hidden `goudacell_cp_*` folder in the
+cwd (CellProfiler's default Images filter skips dot-folders; `-t` keeps its temp files out
+of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` with
+`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. Working
+install (CellProfiler 4.2.8.1, Python 3.9, OpenJDK from conda-forge), in its own env since
+it needs numpy<2:
+
+```bash
+conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
+```
+
 ## Running Tests
 
-Tests are local-only except the brieflow parity test (see above).
+Tests are local-only except the brieflow parity test (see above) and
+`tests/test_cellprofiler_backend.py` (skips without CellProfiler).
 
 ```bash
 BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v
+GOUDACELL_CELLPROFILER=/path/to/envs/cellprofiler/bin/cellprofiler \
+    pytest tests/test_cellprofiler_backend.py -v
 ```

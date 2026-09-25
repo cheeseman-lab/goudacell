@@ -15,7 +15,7 @@ class FeatureExtractionParams:
         enabled: Whether to run feature extraction.
         method: Extraction backend. One of "cp_emulator" (built-in, default),
             "cp_measure" (requires cp-measure package), or "cellprofiler"
-            (requires cellprofiler-core package).
+            (a CellProfiler install, run headless, and ``pipeline_file``).
         channel_names: Names for each channel (auto-detected if None).
         channels: Channel indices to extract from (None = all channels). Use to
             restrict extraction to specific channels (e.g. [2] for one stain).

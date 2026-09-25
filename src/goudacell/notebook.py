@@ -24,6 +24,7 @@ Custom per-cell features (brieflow ``CUSTOM_FEATURES``) are registered in code w
 ``ui.set_custom_features([my_feature, (other_feature, "cell")])``.
 """
 
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -57,18 +58,17 @@ DEFAULT_N_CHANNELS = 8
 def available_feature_methods() -> List[str]:
     """Feature backends actually runnable in the current environment.
 
-    `cp_emulator` is built in; `cp_measure` needs its package installed;
-    `cellprofiler` needs a CellProfiler CLI on PATH. Unavailable backends are
-    hidden so selecting one can't produce a config that fails everywhere.
+    `cp_emulator` is built in; `cp_measure` needs its package installed and is
+    hidden without it. `cellprofiler` runs a CellProfiler CLI as a subprocess, usually
+    from its own conda env, so it is always offered and its command and pipeline are
+    checked when the config is generated.
     """
     import importlib.util
-    import shutil
 
     methods = ["cp_emulator"]
     if importlib.util.find_spec("cp_measure") is not None:
         methods.append("cp_measure")
-    if shutil.which("cellprofiler") is not None:
-        methods.append("cellprofiler")
+    methods.append("cellprofiler")
     return methods
 
 FLOW_HELP = (
@@ -159,6 +159,17 @@ def _section(title: str, body: widgets.Widget) -> widgets.Accordion:
     accordion = widgets.Accordion(children=[body], selected_index=None)
     accordion.set_title(0, title)
     return accordion
+
+
+def _cellprofiler_problem(fe: Optional[FeatureExtractionParams]) -> Optional[str]:
+    """Why a config's CellProfiler backend can't run here, or None."""
+    if fe is None or not fe.enabled or fe.method != "cellprofiler":
+        return None
+    if not fe.pipeline_file or not Path(fe.pipeline_file).is_file():
+        return f"CellProfiler pipeline not found: {fe.pipeline_file!r}"
+    if shutil.which(fe.cellprofiler_cmd) is None:
+        return f"CellProfiler command not found: {fe.cellprofiler_cmd!r}"
+    return None
 
 
 def _count(masks) -> int:
@@ -437,10 +448,18 @@ class ParameterUI:
             options=available_feature_methods(), value="cp_emulator", description="Method:"
         )
         self.feat_method_note = widgets.HTML(
-            "<i>Only backends installed in this environment are listed. To enable more: "
-            "<code>cp_measure</code> → <code>uv pip install -e '.[cp_measure]'</code>; "
-            "<code>cellprofiler</code> → a CellProfiler env on PATH + a pipeline.</i>"
+            "<i><code>cp_measure</code> is listed once installed "
+            "(<code>uv pip install -e '.[cp_measure]'</code>); "
+            "<code>cellprofiler</code> needs a CellProfiler env (its <code>bin/cellprofiler</code> "
+            "as the command) + a .cppipe pipeline (see the README).</i>"
         )
+        self.feat_cp_pipeline = widgets.Text(
+            value="", placeholder="path/to/pipeline.cppipe", description="CP pipeline:"
+        )
+        self.feat_cp_cmd = widgets.Text(
+            value=shutil.which("cellprofiler") or "cellprofiler", description="CP command:"
+        )
+        self.feat_cp_box = widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd])
         self.feat_channels = widgets.Text(
             value="", placeholder="all (e.g. 0,2)", description="Channels:"
         )
@@ -486,6 +505,7 @@ class ParameterUI:
                 self.feat_enabled,
                 self.feat_method,
                 self.feat_method_note,
+                self.feat_cp_box,
                 widgets.HBox([self.feat_channels, self.feat_channel_names]),
                 self.feat_compartments,
                 widgets.HBox([self.feat_texture, self.feat_correlation, self.feat_neighbors]),
@@ -707,6 +727,7 @@ class ParameterUI:
         self.preview_feat_btn.on_click(self._on_preview_features)
         self.so_enabled.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.feat_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_run_btn.on_click(self._on_second_objs)
         self.config_btn.on_click(self._on_generate)
 
@@ -729,6 +750,7 @@ class ParameterUI:
         self.so_cellpose_box.layout.display = "" if method == "cellpose" else "none"
         self.so_stardist_box.layout.display = "" if method == "stardist" else "none"
         self.so_threshold_box.layout.display = "" if method == "threshold" else "none"
+        self.feat_cp_box.layout.display = "" if self.feat_method.value == "cellprofiler" else "none"
 
     def _refresh_images(self) -> None:
         """Repopulate the image dropdown from input_dir/file_pattern."""
@@ -820,6 +842,7 @@ class ParameterUI:
     def build_feature_params(self) -> FeatureExtractionParams:
         """Build FeatureExtractionParams from the feature-extraction widgets."""
         compartments = list(self.feat_compartments.value)
+        pipeline = self.feat_cp_pipeline.value.strip()
         return FeatureExtractionParams(
             enabled=self.feat_enabled.value,
             method=self.feat_method.value,
@@ -833,6 +856,8 @@ class ParameterUI:
             combine_tables=self.feat_combine.value,
             foci_channel=_parse_foci(self.feat_foci.value),
             custom_features=list(self.custom_feature_definitions) or None,
+            pipeline_file=str(Path(pipeline).resolve()) if pipeline else None,
+            cellprofiler_cmd=self.feat_cp_cmd.value.strip() or "cellprofiler",
         )
 
     def build_second_obj_params(self) -> SecondaryObjectParams:
@@ -1443,6 +1468,8 @@ class ParameterUI:
                 detail += f", {len(fe.custom_features)} custom"
             if fe.combine_tables:
                 detail += ", combined table"
+            if fe.method == "cellprofiler":
+                detail += f", pipeline {fe.pipeline_file}"
             lines.append(detail)
         else:
             lines.append("Features: off")
@@ -1466,6 +1493,10 @@ class ParameterUI:
             features_dir = root / "features" / name
 
             config = self.build_config()
+            problem = _cellprofiler_problem(config.feature_extraction)
+            if problem:
+                print(f"Config not saved: {problem}")
+                return
             config.output_dir = str(masks_dir)
             config.features_dir = str(features_dir)
             config.to_yaml(config_path)

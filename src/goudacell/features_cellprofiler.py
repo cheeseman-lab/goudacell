@@ -12,12 +12,20 @@ Requires: cellprofiler installed in PATH (can be a separate conda env).
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import tifffile
+
+# Pipeline object name -> (staged mask file stem, goudacell column prefix)
+STAGED_OBJECTS = {
+    "Nuclei": ("nuclei_mask", "nucleus"),
+    "Cells": ("cell_mask", "cell"),
+    "Cytoplasm": ("cytoplasm_mask", "cytoplasm"),
+}
 
 
 def extract_features_cellprofiler(
@@ -31,11 +39,18 @@ def extract_features_cellprofiler(
     include_texture: bool = True,
     include_correlation: bool = True,
     include_neighbors: bool = True,
+    cytoplasm_masks: Optional[np.ndarray] = None,
+    timeout: int = 600,
 ) -> pd.DataFrame:
     """Extract features by running CellProfiler headlessly via CLI.
 
-    Writes image channels and masks as individual TIFFs to a staging directory,
-    runs the CellProfiler pipeline, and reads the resulting measurement CSV.
+    Writes each channel as ``<channel name>.tif`` and the masks as ``nuclei_mask.tif``,
+    ``cell_mask.tif`` and ``cytoplasm_mask.tif`` (uint32 labels) into one input folder,
+    runs the pipeline on it, and reads the per-object CSVs its ExportToSpreadsheet writes.
+    The pipeline's NamesAndTypes must pick those files by name, channels as grayscale
+    images and the masks as objects named ``Nuclei``, ``Cells`` and ``Cytoplasm``. Those
+    three object tables become ``nucleus_``, ``cell_`` and ``cytoplasm_`` columns joined on
+    ``label`` (the mask label); tables of other objects the pipeline creates are not joined.
 
     Args:
         image: Multichannel image (C, H, W).
@@ -45,18 +60,23 @@ def extract_features_cellprofiler(
         pipeline_file: Path to .cppipe pipeline file. Required.
         cellprofiler_cmd: CellProfiler executable (default: "cellprofiler").
             Can be a full path to a CP install in another conda env.
-        output_dir: Directory for CP output. If None, uses a temp directory
-            in the current working directory (never /tmp on shared HPC).
+        output_dir: Directory for the staged input and CP output, kept afterwards. If
+            None, a fresh directory in the current working directory is used and removed
+            (never /tmp on shared HPC).
         include_texture: Unused (pipeline controls this). Kept for API compat.
         include_correlation: Unused (pipeline controls this). Kept for API compat.
         include_neighbors: Unused (pipeline controls this). Kept for API compat.
+        cytoplasm_masks: Optional labeled cytoplasm mask (H, W).
+        timeout: Seconds before the CellProfiler run is killed.
 
     Returns:
-        DataFrame with CellProfiler measurements, or empty DataFrame on failure.
+        DataFrame with a ``label`` column (the mask label) and the CellProfiler
+        measurements of every exported object table.
 
     Raises:
         FileNotFoundError: If pipeline_file doesn't exist.
-        RuntimeError: If cellprofiler executable is not found.
+        RuntimeError: If the executable is not found, CellProfiler fails, or it
+            exports no object table.
     """
     if pipeline_file is None:
         raise ValueError(
@@ -64,13 +84,11 @@ def extract_features_cellprofiler(
             "Build a pipeline in the CellProfiler GUI and export as .cppipe."
         )
 
-    pipeline_file = Path(pipeline_file)
+    pipeline_file = Path(pipeline_file).resolve()
     if not pipeline_file.exists():
         raise FileNotFoundError(f"Pipeline file not found: {pipeline_file}")
 
-    # Check that cellprofiler is available
-    cp_path = shutil.which(cellprofiler_cmd)
-    if cp_path is None:
+    if shutil.which(cellprofiler_cmd) is None:
         raise RuntimeError(
             f"CellProfiler executable not found: '{cellprofiler_cmd}'. "
             "Install CellProfiler or provide the full path via cellprofiler_cmd."
@@ -85,95 +103,77 @@ def extract_features_cellprofiler(
     if channel_names is None:
         channel_names = [f"ch{i}" for i in range(n_channels)]
 
-    # Set up staging directories (in cwd, never /tmp on shared HPC)
-    staging_dir = Path(output_dir) if output_dir else Path(".cp_staging")
+    # Not a dot-directory: CellProfiler's default Images filter skips hidden folders
+    if output_dir is None:
+        staging_dir = Path(tempfile.mkdtemp(prefix="goudacell_cp_", dir="."))
+    else:
+        staging_dir = Path(output_dir)
     input_dir = staging_dir / "input"
     cp_output_dir = staging_dir / "output"
-    input_dir.mkdir(parents=True, exist_ok=True)
-    cp_output_dir.mkdir(parents=True, exist_ok=True)
+    cp_temp_dir = staging_dir / "tmp"
+    for folder in (input_dir, cp_output_dir, cp_temp_dir):
+        folder.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Write individual channel images as TIFFs
         for ch_idx, ch_name in enumerate(channel_names):
-            tifffile.imwrite(
-                input_dir / f"{ch_name}.tif",
-                image[ch_idx],
-            )
+            tifffile.imwrite(input_dir / f"{ch_name}.tif", image[ch_idx])
+        # Masks are staged as 1..n so CellProfiler's ObjectNumber maps back to the label
+        masks = {"Nuclei": nuclei_masks, "Cells": cell_masks, "Cytoplasm": cytoplasm_masks}
+        labels = {}
+        for obj, mask in masks.items():
+            if mask is not None:
+                labels[obj] = np.unique(mask[mask > 0])
+                staged = np.zeros(mask.shape, np.uint32)
+                staged[mask > 0] = np.searchsorted(labels[obj], mask[mask > 0]) + 1
+                tifffile.imwrite(input_dir / f"{STAGED_OBJECTS[obj][0]}.tif", staged)
 
-        # Write masks
-        tifffile.imwrite(input_dir / "nuclei_mask.tif", nuclei_masks.astype(np.uint32))
-        if cell_masks is not None:
-            tifffile.imwrite(input_dir / "cell_mask.tif", cell_masks.astype(np.uint32))
-
-        # Run CellProfiler headlessly
+        # -t keeps CellProfiler's temporary files out of /tmp
         cmd = [
             cellprofiler_cmd,
-            "-c",  # headless (no GUI)
-            "-r",  # run immediately
+            "-c",
+            "-r",
             "-p", str(pipeline_file),
-            "-i", str(input_dir),
-            "-o", str(cp_output_dir),
+            "-i", str(input_dir.resolve()),
+            "-o", str(cp_output_dir.resolve()),
+            "-t", str(cp_temp_dir.resolve()),
         ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 min timeout per image
-        )
-
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
-            print(f"CellProfiler failed (exit code {result.returncode}):")
-            print(result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr)
-            return pd.DataFrame(columns=["label"])
+            staged = sorted(f.name for f in input_dir.iterdir())
+            raise RuntimeError(
+                f"CellProfiler failed (exit code {result.returncode}); its NamesAndTypes must "
+                f"match the staged files {staged}:\n{result.stderr[-2000:]}"
+            )
 
-        # Find and read the output CSV(s)
-        # CellProfiler typically writes files like:
-        #   MyExpt_Nuclei.csv, MyExpt_Cells.csv, MyExpt_Image.csv
-        csv_files = sorted(cp_output_dir.glob("*.csv"))
-        if not csv_files:
-            # Also check for .txt exports
-            csv_files = sorted(cp_output_dir.glob("*.txt"))
-
-        if not csv_files:
-            print(f"Warning: No CSV output found in {cp_output_dir}")
-            return pd.DataFrame(columns=["label"])
-
-        # Merge all object-level CSVs (skip Image-level)
-        dfs = []
-        for csv_file in csv_files:
-            if "image" in csv_file.stem.lower():
-                continue  # Skip image-level measurements
-            df = pd.read_csv(csv_file)
-            if len(df) > 0:
-                dfs.append(df)
-
-        if not dfs:
-            return pd.DataFrame(columns=["label"])
-
-        # If multiple object tables, merge on ObjectNumber
-        if len(dfs) == 1:
-            return dfs[0]
-
-        result_df = dfs[0]
-        for df in dfs[1:]:
-            # Find common merge key
-            merge_key = None
-            for key in ["ObjectNumber", "label", "ImageNumber"]:
-                if key in result_df.columns and key in df.columns:
-                    merge_key = key
-                    break
-            if merge_key:
-                result_df = result_df.merge(df, on=merge_key, how="outer", suffixes=("", "_dup"))
-            else:
-                result_df = pd.concat([result_df, df], axis=1)
-
-        return result_df
+        # ExportToSpreadsheet names files <prefix><object>.csv (default prefix "MyExpt_")
+        tables = []
+        for csv_file in sorted(cp_output_dir.glob("*.csv")):
+            obj = csv_file.stem.split("_")[-1]
+            if obj in labels:
+                tables.append(_label_object_table(pd.read_csv(csv_file), obj, labels[obj]))
+        if not tables:
+            raise RuntimeError(
+                f"CellProfiler exported no Nuclei/Cells/Cytoplasm table to {cp_output_dir}; "
+                "the pipeline needs those objects from the staged masks and "
+                f"ExportToSpreadsheet (CSV).\n{result.stderr[-2000:]}"
+            )
+        result_df = tables[0]
+        for df in tables[1:]:
+            result_df = result_df.merge(df, on="label", how="outer")
+        return result_df.sort_values("label").reset_index(drop=True)
 
     finally:
-        # Clean up staging directory if we created it
-        if output_dir is None and staging_dir.exists():
+        if output_dir is None:
             shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def _label_object_table(df: pd.DataFrame, obj: str, labels: np.ndarray) -> pd.DataFrame:
+    """Prefix an exported object table's columns by compartment and key it by mask label."""
+    prefix = STAGED_OBJECTS[obj][1]
+    features = df.drop(columns=["ImageNumber", "ObjectNumber"], errors="ignore")
+    features = features.rename(columns=lambda c: f"{prefix}_{c}")
+    label = pd.Series(labels[df["ObjectNumber"].to_numpy() - 1], index=df.index, name="label")
+    return pd.concat([label, features], axis=1)
 
 
 def run_cellprofiler_batch(
@@ -207,7 +207,7 @@ def run_cellprofiler_batch(
     pipeline_file = Path(pipeline_file)
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
     cmd = [
         cellprofiler_cmd,
@@ -216,6 +216,7 @@ def run_cellprofiler_batch(
         "-p", str(pipeline_file),
         "-i", str(input_dir),
         "-o", str(output_dir),
+        "-t", str(output_dir / "tmp"),  # CellProfiler's temp files, not /tmp
     ]
 
     if first_image is not None:

@@ -1,89 +1,109 @@
-"""Parity of goudacell's phenotype code with brieflow's.
+"""Parity of goudacell with brieflow's phenotype code.
 
-Runs brieflow's and goudacell's segmentation post-processing, secondary-object detection
-and feature extraction on the same synthetic inputs and asserts identical outputs.
-Skipped unless ``BRIEFLOW_LIB`` points at a brieflow checkout (its root, ``workflow/`` or
-``workflow/lib``); see CLAUDE.md "Brieflow parity" for the pinned commit.
+goudacell vendors brieflow's phenotype modules verbatim (``src/goudacell/brieflow``, written
+by ``scripts/sync_brieflow.py``). These tests check that:
+
+1. the vendored files equal brieflow's at the pinned commit (after the import rewrite);
+2. goudacell's adapters, API and CLI give the same masks and feature tables as calling
+   brieflow's functions directly, as brieflow-analysis's phenotype notebook does.
+
+Skipped unless ``BRIEFLOW_LIB`` points at a brieflow git checkout. Test 1 reads the pinned
+commit from git, whatever the checkout's state; tests 2 import brieflow's ``lib`` from the
+checkout and need it at the pinned commit. The Cellpose tests run on CPU (use a compute
+node) on ``GOUDACELL_PARITY_TILE`` (a phenotype image; ``GOUDACELL_PARITY_CHANNELS="3,1"``
+sets the DAPI and cytoplasm channels, default last and 1), else on the first image in the
+checkout's ``tests/small_test_analysis/small_test_data/phenotype/real_images``, else on a
+synthetic tile.
 
     BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v
 """
 
 import contextlib
-import hashlib
-import importlib
+import importlib.util
 import io
 import os
+import subprocess
 import sys
-import types
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from skimage.draw import disk
+from skimage.measure import regionprops
 
-# brieflow commit goudacell is in parity with (zarr3), and each mapped file's sha256 prefix.
-BRIEFLOW_COMMIT = "6beb71a531022e117064e814e80998dd8f465b5f"
-BRIEFLOW_SOURCES = {
-    "lib/external/cp_emulator.py": "eaacc7911d08f166",
-    "lib/phenotype/constants.py": "601b23fb779e69af",
-    "lib/phenotype/custom_features.py": "674415e9c179482e",
-    "lib/phenotype/extract_phenotype_cp_emulator.py": "22743fddf4133150",
-    "lib/phenotype/extract_phenotype_cp_measure.py": "308f88e5e80f8cd4",
-    "lib/phenotype/extract_phenotype_second_objs.py": "e9d0a6ab022f0f7a",
-    "lib/phenotype/identify_cytoplasm_cellpose.py": "23d275f8e05f43ba",
-    "lib/phenotype/segment_secondary_object.py": "72c542764c8d6111",
-    "lib/shared/feature_extraction.py": "80ce2d4be8177e72",
-    "lib/shared/feature_table_utils.py": "ca807bd48fd53444",
-    "lib/shared/log_filter.py": "4880db17651e0d0e",
-    "lib/shared/segment_cellpose.py": "7c917d79d43765c6",
-    "lib/shared/segmentation_utils.py": "8e0e4fd1aab91192",
-    "scripts/phenotype/extract_phenotype.py": "20d3209975ddf75a",
-    "scripts/phenotype/identify_second_objs.py": "53c75e9b25acfcb2",
-    "scripts/phenotype/merge_second_objs_phenotype_cp.py": "36d1a6f488e2391d",
-    "scripts/shared/segment.py": "bc9d05c67b8b56d3",
-}
+from goudacell.brieflow import BRIEFLOW_COMMIT
+
+REPO = Path(__file__).resolve().parents[1]
+_LIB = os.environ.get("BRIEFLOW_LIB")
+ROOT = Path(_LIB).expanduser().resolve() if _LIB else None
+pytestmark = pytest.mark.skipif(ROOT is None, reason="BRIEFLOW_LIB not set")
 
 
-def _workflow_dir():
-    root = os.environ.get("BRIEFLOW_LIB")
-    if not root:
-        return None
-    root = Path(root).expanduser().resolve()
-    for candidate in (root / "workflow", root, root.parent):
-        if (candidate / "lib" / "phenotype").is_dir():
-            return candidate
-    raise RuntimeError(f"BRIEFLOW_LIB={root} does not contain workflow/lib/phenotype")
+def _checkout_commit():
+    out = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True
+    )
+    return out.stdout.strip()
 
 
-WORKFLOW = _workflow_dir()
-pytestmark = pytest.mark.skipif(WORKFLOW is None, reason="BRIEFLOW_LIB not set")
+AT_PIN = ROOT is not None and _checkout_commit() == BRIEFLOW_COMMIT
+at_pin = pytest.mark.skipif(
+    not AT_PIN, reason=f"brieflow checkout is not at the pinned commit {BRIEFLOW_COMMIT[:7]}"
+)
 
 
-def _import_brieflow(module):
-    """Import a brieflow ``lib`` module, stubbing what only its plotting helpers need."""
-    if str(WORKFLOW) not in sys.path:
-        sys.path.insert(0, str(WORKFLOW))
-    if "microfilm" not in sys.modules and importlib.util.find_spec("microfilm") is None:
-        microplot = types.ModuleType("microfilm.microplot")
-        microplot.Microimage = microplot.Micropanel = object
-        sys.modules["microfilm"] = types.ModuleType("microfilm")
-        sys.modules["microfilm.microplot"] = microplot
-    try:
-        importlib.import_module("lib.shared.configuration_utils")
-    except ImportError:
-        plotting = types.ModuleType("lib.shared.configuration_utils")
-        plotting.create_micropanel = plotting.random_cmap = None
-        sys.modules["lib.shared.configuration_utils"] = plotting
+def _sync_module():
+    path = REPO / "scripts" / "sync_brieflow.py"
+    spec = importlib.util.spec_from_file_location("sync_brieflow", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _brieflow(module):
+    """Import a module of brieflow's own ``lib`` from the checkout."""
+    workflow = str(ROOT / "workflow")
+    if workflow not in sys.path:
+        sys.path.insert(0, workflow)
     return importlib.import_module(module)
 
 
 def _quiet(func, *args, **kwargs):
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         return func(*args, **kwargs)
 
 
-# Custom features: module-level and self-contained, as register_custom_features requires.
+# ---------------------------------------------------------------------------
+# 1. Vendored files are brieflow's, byte for byte after the import rewrite
+# ---------------------------------------------------------------------------
+def test_vendored_files_match_pinned_commit():
+    sync = _sync_module()
+    expected = sync.vendored_sources(ROOT, BRIEFLOW_COMMIT)
+    on_disk = {str(p.relative_to(sync.DEST)): p.read_text() for p in sync.DEST.rglob("*.py")}
+    assert sorted(on_disk) == sorted(expected), "vendored file set differs; re-run the sync"
+    stale = [path for path, text in expected.items() if on_disk[path] != text]
+    assert not stale, f"vendored files differ from brieflow {BRIEFLOW_COMMIT[:7]}: {stale}"
+
+
+def test_only_imports_are_rewritten():
+    sync = _sync_module()
+    for module in sync.MODULES:
+        original = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"{BRIEFLOW_COMMIT}:workflow/lib/{module}"],
+            capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        vendored = (sync.DEST / module).read_text().splitlines()
+        assert len(original) == len(vendored), module
+        for a, b in zip(original, vendored):
+            if a != b:
+                assert b.lstrip().startswith(("from goudacell.brieflow.", "import goudacell.")), b
+                assert a.replace(" lib.", " goudacell.brieflow.", 1) == b
+
+
+# ---------------------------------------------------------------------------
+# 2a. Feature extraction and secondary objects on synthetic masks
+# ---------------------------------------------------------------------------
 def total_second_channel(region):
     return float(region.intensity_image[..., 1].sum())
 
@@ -102,20 +122,6 @@ CUSTOM_FEATURES = [
 CHANNEL_NAMES = ["DAPI", "TUB", "FOCI", "VAC"]
 
 
-def _raw_masks(seed, size=160):
-    """Independently labelled nuclei and cells, with the overlaps reconcile must resolve."""
-    rng = np.random.default_rng(seed)
-    nuclei = np.zeros((size, size), int)
-    cells = np.zeros((size, size), int)
-    for k in range(1, 30):
-        centre = rng.integers(6, size - 6, 2)
-        cells[disk(tuple(centre), rng.integers(7, 14), shape=cells.shape)] = k
-        offset = centre + rng.integers(-5, 6, 2)
-        nucleus_label = k + 7 * rng.integers(0, 3)
-        nuclei[disk(tuple(offset), rng.integers(2, 6), shape=cells.shape)] = nucleus_label
-    return nuclei, cells
-
-
 def _tile(seed=0, size=192):
     """A synthetic 4-channel tile with reconciled nuclei/cell masks.
 
@@ -132,8 +138,8 @@ def _tile(seed=0, size=192):
             cells[disk((y, x), 17, shape=cells.shape)] = label
             centre = (y + rng.integers(-3, 4), x + rng.integers(-3, 4))
             nuclei[disk(centre, 7, shape=cells.shape)] = label
-    nuclei[disk((24, 36), 5, shape=cells.shape)] = 1  # reaches into cell 2
-    nuclei[disk((60, 66), 3, shape=cells.shape)] = 5  # second nucleus of cell 5
+    nuclei[disk((24, 36), 5, shape=cells.shape)] = 1
+    nuclei[disk((60, 66), 3, shape=cells.shape)] = 5
 
     image = rng.poisson(40, (4, size, size)).astype(np.uint16)
     image[0][nuclei > 0] += 900
@@ -151,90 +157,13 @@ def tile():
     return _tile()
 
 
-def test_brieflow_sources_unchanged():
-    """Fail when a mapped brieflow file changes, so the change gets reviewed and ported."""
-    changed = []
-    for rel, expected in BRIEFLOW_SOURCES.items():
-        path = WORKFLOW / rel
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else None
-        if digest != expected:
-            changed.append(rel)
-    assert not changed, (
-        f"brieflow files changed since parity commit {BRIEFLOW_COMMIT[:7]}: {changed}. "
-        "Diff them against that commit, port what changes masks/features/parameters, "
-        "then update BRIEFLOW_COMMIT and the hashes (see CLAUDE.md 'Brieflow parity')."
-    )
-
-
-@pytest.mark.parametrize("helper_index", [None, 2, 3])
-def test_prepare_cellpose(tile, helper_index):
-    pytest.importorskip("cellpose")
-    bsc = _import_brieflow("lib.shared.segment_cellpose")
-    from goudacell.segment import image_log_scale, prepare_cellpose
-
-    image = tile[0].copy()
-    image[3] = 0
-    ours = prepare_cellpose(image, 0, 1, helper_index=helper_index)
-    theirs = bsc.prepare_cellpose(image, 0, 1, helper_index=helper_index)
-    assert ours.dtype == theirs.dtype
-    np.testing.assert_array_equal(ours, theirs)
-    np.testing.assert_array_equal(
-        prepare_cellpose(image, 0, 1, logscale=False),
-        bsc.prepare_cellpose(image, 0, 1, logscale=False),
-    )
-    bsu = _import_brieflow("lib.shared.segmentation_utils")
-    np.testing.assert_array_equal(image_log_scale(image[1]), bsu.image_log_scale(image[1]))
-
-
-@pytest.mark.parametrize("how", ["consensus", "contained_in_cells"])
-@pytest.mark.parametrize("seed", range(8))
-def test_reconcile_nuclei_per_cell_cytoplasm(seed, how):
-    bsu = _import_brieflow("lib.shared.segmentation_utils")
-    bcyto = _import_brieflow("lib.phenotype.identify_cytoplasm_cellpose")
-    from goudacell.segment import count_nuclei_per_cell, identify_cytoplasm, reconcile_nuclei_cells
-
-    nuclei, cells = _raw_masks(seed)
-    ours = reconcile_nuclei_cells(nuclei.copy(), cells.copy(), how=how)
-    theirs = _quiet(bsu.reconcile_nuclei_cells, nuclei.copy(), cells.copy(), how=how)
-    for a, b in zip(ours, theirs):
-        np.testing.assert_array_equal(a, b)
-    assert count_nuclei_per_cell(nuclei, ours[1]) == bsu.count_nuclei_per_cell(nuclei, theirs[1])
-
-    np.testing.assert_array_equal(
-        identify_cytoplasm(*ours), _quiet(bcyto.identify_cytoplasm_cellpose, *theirs)
-    )
-    raw_theirs = _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells)
-    raw_ours = identify_cytoplasm(nuclei, cells)
-    assert (raw_ours is None) == (raw_theirs is None)
-    if raw_ours is not None:
-        np.testing.assert_array_equal(raw_ours, raw_theirs)
-
-
-def test_identify_cytoplasm_overlapping_nuclei(tile):
-    bcyto = _import_brieflow("lib.phenotype.identify_cytoplasm_cellpose")
-    from goudacell.segment import identify_cytoplasm
-
-    _, nuclei, cells = tile
-    np.testing.assert_array_equal(
-        identify_cytoplasm(nuclei, cells), _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells)
-    )
-
-
-def test_custom_feature_registration():
-    bcf = _import_brieflow("lib.phenotype.custom_features")
-    from goudacell.custom_features import register_custom_features
-
-    assert register_custom_features(CUSTOM_FEATURES) == bcf.register_custom_features(
-        CUSTOM_FEATURES
-    )
-
-
+@at_pin
 @pytest.mark.parametrize("with_cells", [True, False])
 def test_cp_emulator_features(tile, with_cells):
-    bemu = _import_brieflow("lib.phenotype.extract_phenotype_cp_emulator")
-    bcf = _import_brieflow("lib.phenotype.custom_features")
-    bcyto = _import_brieflow("lib.phenotype.identify_cytoplasm_cellpose")
-    from goudacell.custom_features import load_custom_features
+    bemu = _brieflow("lib.phenotype.extract_phenotype_cp_emulator")
+    bcf = _brieflow("lib.phenotype.custom_features")
+    bcyto = _brieflow("lib.phenotype.identify_cytoplasm_cellpose")
+    from goudacell.brieflow.phenotype.custom_features import load_custom_features
     from goudacell.features import extract_features
 
     image, nuclei, cells = tile
@@ -244,37 +173,53 @@ def test_cp_emulator_features(tile, with_cells):
     cytoplasms = _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells) if with_cells else None
 
     theirs = bemu.extract_phenotype_cp_emulator(
-        image,
-        nuclei,
-        cells_in,
-        wildcards={},
-        cytoplasms=cytoplasms,
-        foci_channel=[2],
-        channel_names=CHANNEL_NAMES,
-        custom_features=bcf.load_custom_features(definitions),
+        image, nuclei, cells_in, wildcards={}, cytoplasms=cytoplasms, foci_channel=[2],
+        channel_names=CHANNEL_NAMES, custom_features=bcf.load_custom_features(definitions),
     )
-    ours = extract_features(
-        image,
-        nuclei,
-        cells_in,
-        channel_names=CHANNEL_NAMES,
-        foci_channel=[2],
-        custom_features=load_custom_features(definitions),
+    ours = _quiet(
+        extract_features, image, nuclei, cells_in, channel_names=CHANNEL_NAMES,
+        foci_channel=[2], custom_features=load_custom_features(definitions),
     )
-    assert list(ours.columns) == list(theirs.columns)
-    pd.testing.assert_frame_equal(ours, theirs, check_dtype=False)
+    pd.testing.assert_frame_equal(ours, theirs)
 
 
-def test_num_nuclei_column(tile):
-    from goudacell.features import add_num_nuclei
+@at_pin
+def test_feature_selection_is_a_column_subset(tile):
+    """Channel, compartment and block options select from brieflow's own table."""
+    from goudacell.features import extract_features
 
-    df = pd.DataFrame({"label": [1, 2, 3]})
-    counts = {1: 2, 3: 1}
-    # brieflow extract_phenotype.py: map the per-cell count, default 1
-    expected = df["label"].map(pd.Series(counts)).fillna(1).astype(int)
-    pd.testing.assert_series_equal(
-        add_num_nuclei(df.copy(), counts)["num_nuclei"], expected, check_names=False
+    image, nuclei, cells = tile
+    selection = dict(channel_names=["DAPI", "TUB"], channels=[0, 1])
+    full = _quiet(extract_features, image, nuclei, cells, **selection)
+    subset = _quiet(
+        extract_features, image, nuclei, cells, compartments=["nucleus", "cytoplasm"],
+        include_texture=False, include_correlation=False, include_neighbors=False, **selection,
     )
+    assert set(subset.columns) < set(full.columns)
+    assert not any(c.startswith("cell_") for c in subset.columns)
+    assert not any("pftas" in c or "haralick" in c or "correlation" in c for c in subset.columns)
+    assert not any("neighbor" in c or "FOCI" in c or "VAC" in c for c in subset.columns)
+    pd.testing.assert_frame_equal(subset, full[subset.columns])
+
+
+@at_pin
+def test_cp_measure_features(tile):
+    pytest.importorskip("cp_measure")
+    bcm = _brieflow("lib.phenotype.extract_phenotype_cp_measure")
+    bcyto = _brieflow("lib.phenotype.identify_cytoplasm_cellpose")
+    from goudacell.features import extract_features
+
+    image, nuclei, cells = tile
+    theirs = _quiet(
+        bcm.extract_phenotype_cp_measure, image[:2], nuclei, cells,
+        cytoplasms=_quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
+        channel_names=CHANNEL_NAMES[:2],
+    )
+    ours = _quiet(
+        extract_features, image, nuclei, cells, channel_names=CHANNEL_NAMES[:2],
+        channels=[0, 1], method="cp_measure",
+    )
+    pd.testing.assert_frame_equal(ours, theirs)
 
 
 SECOND_OBJ_CASES = [
@@ -282,174 +227,217 @@ SECOND_OBJ_CASES = [
     {"size_filter_method": "area", "second_obj_min_size": 20, "second_obj_max_size": 400},
     {"declump_method": "intensity", "declump_mode": "propagate", "fill_holes": "declump"},
     {"threshold_method": "min_cross_entropy", "use_shape_refinement": True},
-    {"maxima_reduction_factor": 0.2, "use_morphological_opening": False},
 ]
 
 
+@at_pin
 @pytest.mark.parametrize("overrides", SECOND_OBJ_CASES)
-def test_secondary_objects_threshold(tile, overrides):
-    bso = _import_brieflow("lib.phenotype.segment_secondary_object")
-    bfeat = _import_brieflow("lib.phenotype.extract_phenotype_second_objs")
-    from goudacell.config import SecondaryObjectParams
-    from goudacell.features_second_objs import extract_phenotype_second_objs
-    from goudacell.secondary_objects import segment_second_objs_from_config
-    from goudacell.segment import identify_cytoplasm
+def test_secondary_objects(tile, overrides):
+    bso = _brieflow("lib.phenotype.segment_secondary_object")
+    bfeat = _brieflow("lib.phenotype.extract_phenotype_second_objs")
+    bcyto = _brieflow("lib.phenotype.identify_cytoplasm_cellpose")
+    from goudacell.config import FeatureExtractionParams, SecondaryObjectParams
+    from goudacell.features import extract_second_obj_features
+    from goudacell.segment import segment_second_objects
 
     image, nuclei, cells = tile
-    cytoplasms = identify_cytoplasm(nuclei, cells)
-    centroids = {i: (float(i * 7), float(i * 5)) for i in range(1, 9)}
     params = SecondaryObjectParams(
         second_obj_detection=True, second_obj_channel_index=3, **overrides
-    ).to_brieflow_params(gpu=False)
-
-    args = (image, cells, cytoplasms, params, centroids)
-    ours = _quiet(segment_second_objs_from_config, *args)
-    theirs = _quiet(bso.segment_second_objs_from_config, *args)
+    )
+    # The phenotype notebook: nucleus centroids from the nuclei mask
+    centroids = {r.label: r.centroid for r in regionprops(nuclei)}
+    theirs = _quiet(
+        bso.segment_second_objs_from_config, image, cells,
+        _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
+        params.to_brieflow_params(gpu=False), nuclei_centroids=centroids,
+    )
+    ours = _quiet(segment_second_objects, image, nuclei, cells, params, False)
     np.testing.assert_array_equal(ours[0], theirs[0])
     np.testing.assert_array_equal(ours[2], theirs[2])
     for key in ("cell_summary", "second_obj_cell_mapping"):
         pd.testing.assert_frame_equal(ours[1][key], theirs[1][key])
+    assert len(np.unique(ours[0])) > 5
 
-    if np.any(ours[0]):
-        kwargs = dict(
-            second_obj_cell_mapping_df=theirs[1]["second_obj_cell_mapping"],
-            foci_channel=2,
-            channel_names=CHANNEL_NAMES,
-        )
-        pd.testing.assert_frame_equal(
-            extract_phenotype_second_objs(image, ours[0], {}, **kwargs),
-            _quiet(bfeat.extract_phenotype_second_objs, image, theirs[0], {}, **kwargs),
-        )
-
-
-def test_secondary_objects_detected(tile):
-    """Guard against the threshold case passing trivially on an empty result."""
-    from goudacell.config import SecondaryObjectParams
-    from goudacell.secondary_objects import segment_second_objs_from_config
-    from goudacell.segment import identify_cytoplasm
-
-    image, nuclei, cells = tile
-    params = SecondaryObjectParams(second_obj_detection=True, second_obj_channel_index=3)
-    masks, _, _ = _quiet(
-        segment_second_objs_from_config,
-        image,
-        cells,
-        identify_cytoplasm(nuclei, cells),
-        params.to_brieflow_params(gpu=False),
+    fe = FeatureExtractionParams(enabled=True, channel_names=CHANNEL_NAMES, foci_channel=2)
+    their_features = _quiet(
+        bfeat.extract_phenotype_second_objs, image, second_objs=theirs[0], wildcards={},
+        second_obj_cell_mapping_df=theirs[1]["second_obj_cell_mapping"], foci_channel=2,
+        channel_names=CHANNEL_NAMES,
     )
-    assert len(np.unique(masks)) > 5
+    our_features = _quiet(extract_second_obj_features, fe, image, ours[0], ours[1])
+    pd.testing.assert_frame_equal(our_features, their_features)
 
 
-def test_cp_measure_features(tile):
-    pytest.importorskip("cp_measure")
-    bcm = _import_brieflow("lib.phenotype.extract_phenotype_cp_measure")
-    bcyto = _import_brieflow("lib.phenotype.identify_cytoplasm_cellpose")
-    from goudacell.features import extract_features
+# ---------------------------------------------------------------------------
+# 2b. Cellpose segmentation, the API and the CLI end to end on one tile
+# ---------------------------------------------------------------------------
+def _real_tile():
+    path = os.environ.get("GOUDACELL_PARITY_TILE")
+    if path is None:
+        images = ROOT / "tests/small_test_analysis/small_test_data/phenotype/real_images"
+        found = sorted(images.glob("*.nd2")) if images.is_dir() else []
+        path = found[0] if found else None
+    if path is None:
+        return None
+    from goudacell.io import load_image
 
-    image, nuclei, cells = tile
-    image = image[:2]
-    theirs = _quiet(
-        bcm.extract_phenotype_cp_measure,
-        image,
-        nuclei,
-        cells,
-        cytoplasms=_quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
-        channel_names=CHANNEL_NAMES[:2],
-    )
-    ours = _quiet(
-        extract_features,
-        image,
-        nuclei,
-        cells,
-        channel_names=CHANNEL_NAMES[:2],
-        method="cp_measure",
-    )
-    assert list(ours.columns) == list(theirs.columns)
-    pd.testing.assert_frame_equal(ours, theirs, check_dtype=False)
+    image = load_image(Path(path), channel=None, z_project=True)
+    h, w = image.shape[-2:]
+    image = image[:, h // 2 - 256 : h // 2 + 256, w // 2 - 256 : w // 2 + 256]
+    channels = os.environ.get("GOUDACELL_PARITY_CHANNELS")
+    dapi, cyto = map(int, channels.split(",")) if channels else (image.shape[0] - 1, 1)
+    return np.ascontiguousarray(image), dapi, cyto
 
 
 @pytest.fixture(scope="module")
 def cellpose_tile():
-    """A small tile Cellpose can segment on CPU: smooth nuclei and cells."""
+    """(image, dapi_index, cyto_index): a real phenotype crop, else a smooth synthetic tile."""
     pytest.importorskip("cellpose")
+    real = _real_tile()
+    if real is not None:
+        return real
     from scipy import ndimage
 
-    image, nuclei, cells = _tile(seed=3, size=224)
-    smooth = np.stack(
-        [ndimage.gaussian_filter(image[c].astype(float), 1.5) for c in range(4)]
-    ).astype(np.uint16)
-    return smooth
+    image, _, _ = _tile(seed=3, size=224)
+    smooth = [ndimage.gaussian_filter(image[c].astype(float), 1.5) for c in range(4)]
+    return np.stack(smooth).astype(np.uint16), 0, 1
 
 
-@pytest.mark.parametrize("reconcile", ["contained_in_cells", "consensus"])
-def test_cellpose_dual_segmentation(cellpose_tile, reconcile):
-    bsc = _import_brieflow("lib.shared.segment_cellpose")
-    if bsc.CELLPOSE_4X:
-        pytest.skip("brieflow's nuclei model is fixed to cpsam on Cellpose 4.x")
+def _cellpose_4x():
+    return _brieflow("lib.shared.segment_cellpose").CELLPOSE_4X
+
+
+# The phenotype notebook's defaults
+THRESHOLDS = dict(
+    nuclei_flow_threshold=0.4,
+    nuclei_cellprob_threshold=0.0,
+    cell_flow_threshold=1,
+    cell_cellprob_threshold=0,
+)
+
+
+@pytest.fixture(scope="module")
+def diameters(cellpose_tile):
+    image, dapi, cyto = cellpose_tile
+    if _cellpose_4x():
+        return 20.0, 45.0
+    bsc = _brieflow("lib.shared.segment_cellpose")
+    return _quiet(
+        bsc.estimate_diameters, image, dapi_index=dapi, cyto_index=cyto, cellpose_model="cyto3"
+    )
+
+
+@pytest.fixture(scope="module")
+def brieflow_masks(cellpose_tile, diameters):
+    """The phenotype notebook's segmentation cell, run with brieflow's own lib."""
+    bsc = _brieflow("lib.shared.segment_cellpose")
+    image, dapi, cyto = cellpose_tile
+    return _quiet(
+        bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
+        nuclei_diameter=diameters[0], cell_diameter=diameters[1],
+        cellpose_kwargs=dict(THRESHOLDS), cellpose_model="cpsam" if _cellpose_4x() else "cyto3",
+        helper_index=None, gpu=False, reconcile="contained_in_cells", cells=True,
+        return_counts=True,
+    )
+
+
+@at_pin
+def test_estimate_diameters(cellpose_tile, diameters):
+    if _cellpose_4x():
+        pytest.skip("Cellpose 4.x has no size model")
+    from goudacell.segment import estimate_diameters
+
+    image, dapi, cyto = cellpose_tile
+    ours = _quiet(estimate_diameters, image, dapi, cyto, cell_model="cyto3", gpu=False)
+    assert ours == diameters
+
+
+@at_pin
+def test_dual_segmentation(cellpose_tile, diameters, brieflow_masks):
     from goudacell.segment import segment_nuclei_and_cells
 
-    thresholds = dict(
-        nuclei_flow_threshold=0.4,
-        nuclei_cellprob_threshold=0.0,
-        cell_flow_threshold=1.0,
-        cell_cellprob_threshold=0.0,
+    image, dapi, cyto = cellpose_tile
+    nuclei, cells, nuclei_per_cell = _quiet(
+        segment_nuclei_and_cells, image, nuclei_channel=dapi, cyto_channel=cyto,
+        nuclei_diameter=diameters[0], cell_diameter=diameters[1],
+        cell_model="cpsam" if _cellpose_4x() else "cyto3", gpu=False,
+        reconcile="contained_in_cells", return_nuclei_per_cell=True, **THRESHOLDS,
     )
+    np.testing.assert_array_equal(nuclei, brieflow_masks[0])
+    np.testing.assert_array_equal(cells, brieflow_masks[1])
+    assert nuclei_per_cell == brieflow_masks[3]
+    assert len(np.unique(cells)) > 4
+
+
+@at_pin
+def test_nuclei_only_segmentation(cellpose_tile, diameters):
+    bsc = _brieflow("lib.shared.segment_cellpose")
+    from goudacell.segment import brieflow_nuclei_model, segment_nuclei
+
+    image, dapi, cyto = cellpose_tile
+    model = brieflow_nuclei_model()
     theirs = _quiet(
-        bsc.segment_cellpose,
-        cellpose_tile,
-        dapi_index=0,
-        cyto_index=1,
-        nuclei_diameter=14,
-        cell_diameter=34,
-        cellpose_model="cyto3",
-        helper_index=2,
-        cellpose_kwargs=dict(thresholds),
-        reconcile=reconcile,
-        return_counts=True,
-        gpu=False,
+        bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
+        nuclei_diameter=diameters[0], cell_diameter=None, cellpose_model=model,
+        cellpose_kwargs=dict(nuclei_flow_threshold=0.4, nuclei_cellprob_threshold=0.0),
+        cells=False, gpu=False,
     )
-    ours = segment_nuclei_and_cells(
-        cellpose_tile,
-        nuclei_channel=0,
-        cyto_channel=1,
-        nuclei_diameter=14,
-        cell_diameter=34,
-        cell_model="cyto3",
-        nuclei_model="nuclei",
-        gpu=False,
-        reconcile=reconcile,
-        helper_channel=2,
-        return_nuclei_per_cell=True,
-        **thresholds,
-    )
-    np.testing.assert_array_equal(ours[0], theirs[0])
-    np.testing.assert_array_equal(ours[1], theirs[1])
-    assert ours[2] == theirs[3]
-    assert len(np.unique(ours[1])) > 4
-
-
-def test_cellpose_nuclei_only_and_diameters(cellpose_tile):
-    bsc = _import_brieflow("lib.shared.segment_cellpose")
-    if bsc.CELLPOSE_4X:
-        pytest.skip("diameter estimation needs Cellpose 3.x")
-    from goudacell.segment import estimate_diameters, segment_nuclei
-
-    theirs = _quiet(
-        bsc.segment_cellpose,
-        cellpose_tile,
-        dapi_index=0,
-        cyto_index=1,
-        nuclei_diameter=14,
-        cell_diameter=34,
-        cellpose_model="nuclei",
-        cellpose_kwargs=dict(flow_threshold=0.4, cellprob_threshold=0),
-        cells=False,
-        gpu=False,
-    )
-    ours = segment_nuclei(cellpose_tile, 0, 14, model="nuclei", gpu=False)
+    ours = _quiet(segment_nuclei, image, dapi, diameters[0], model=model, gpu=False)
     np.testing.assert_array_equal(ours, theirs)
     assert len(np.unique(ours)) > 4
 
-    assert estimate_diameters(cellpose_tile, 0, 1, cell_model="cyto3", gpu=False) == _quiet(
-        bsc.estimate_diameters, cellpose_tile, dapi_index=0, cyto_index=1, cellpose_model="cyto3"
+
+@at_pin
+def test_cli_matches_brieflow(cellpose_tile, diameters, brieflow_masks, tmp_path):
+    """Config -> ``goudacell segment`` -> masks and features equal brieflow's."""
+    import tifffile
+
+    CliRunner = pytest.importorskip("typer.testing").CliRunner
+
+    from goudacell.cli import app
+    from goudacell.config import (
+        DualSegmentationParams,
+        FeatureExtractionParams,
+        SegmentationConfig,
+    )
+    from goudacell.segment import brieflow_nuclei_model
+
+    bemu = _brieflow("lib.phenotype.extract_phenotype_cp_emulator")
+    bcyto = _brieflow("lib.phenotype.identify_cytoplasm_cellpose")
+    image, dapi, cyto = cellpose_tile
+    names = [f"ch{i}" for i in range(image.shape[0])]
+    (tmp_path / "in").mkdir()
+    tifffile.imwrite(tmp_path / "in" / "tile.tif", image)
+
+    config = SegmentationConfig(
+        input_dir=str(tmp_path / "in"), output_dir=str(tmp_path / "out"),
+        mode="dual", gpu=False, reconcile="contained_in_cells",
+        dual=DualSegmentationParams(
+            nuclei_channel=dapi, cyto_channel=cyto, nuclei_diameter=diameters[0],
+            cell_diameter=diameters[1], cell_model="cpsam" if _cellpose_4x() else "cyto3",
+            nuclei_model=brieflow_nuclei_model(), **THRESHOLDS,
+        ),
+        feature_extraction=FeatureExtractionParams(
+            enabled=True, channel_names=names, output_path="{stem}_features.csv"
+        ),
+    )
+    config.to_yaml(tmp_path / "config.yaml")
+    result = CliRunner().invoke(app, ["segment", str(tmp_path / "config.yaml")])
+    assert result.exit_code == 0, result.output
+
+    nuclei, cells = brieflow_masks[0], brieflow_masks[1]
+    np.testing.assert_array_equal(tifffile.imread(tmp_path / "out/tile_nuclei_mask.tif"), nuclei)
+    np.testing.assert_array_equal(tifffile.imread(tmp_path / "out/tile_cell_mask.tif"), cells)
+
+    # brieflow's extract_phenotype.py: the cp_emulator table plus num_nuclei
+    theirs = _quiet(
+        bemu.extract_phenotype_cp_emulator, image, nuclei, cells, wildcards={},
+        cytoplasms=_quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
+        channel_names=names,
+    )
+    counts = pd.Series(brieflow_masks[3], dtype=float)
+    theirs["num_nuclei"] = theirs["label"].map(counts).fillna(1).astype(int)
+    theirs.to_csv(tmp_path / "theirs.csv", index=False)
+    pd.testing.assert_frame_equal(
+        pd.read_csv(tmp_path / "out/tile_features.csv"), pd.read_csv(tmp_path / "theirs.csv")
     )

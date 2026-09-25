@@ -7,7 +7,7 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 - **Segmentation modes**: nuclei-only, cells-only, or dual (both)
 - **Secondary objects**: detect objects inside cells (pathogens, organelles) by thresholding or Cellpose
 - **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
-- **Brieflow parity**: same masks and features as [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype step for the same parameters
+- **Brieflow inside**: runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype code (vendored unchanged), so masks and features match brieflow's for the same parameters
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
 - **Cellpose 3 & 4**: Supports both versions with automatic model selection
 

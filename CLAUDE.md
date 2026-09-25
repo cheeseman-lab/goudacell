@@ -12,22 +12,16 @@ Part of the **fry-python-tools** ecosystem — single-purpose GPU tools for the 
 goudacell/
 ├── src/goudacell/              # Main package
 │   ├── io.py                   # Image I/O (ND2, TIFF, DV, OME-Zarr)
-│   ├── segment.py              # Cellpose segmentation (+ reconcile, cytoplasm, diameters)
-│   ├── secondary_objects.py    # Secondary-object detection (vendored from brieflow)
+│   ├── segment.py              # Segmentation adapters over brieflow (+ sweeps, cells mode)
+│   ├── features.py             # Feature-extraction adapters over brieflow
+│   ├── features_cellprofiler.py # CellProfiler headless backend (goudacell-only)
 │   ├── config.py               # YAML config handling
 │   ├── cli.py                  # CLI entry point
-│   ├── features.py             # Feature extraction dispatcher
-│   ├── cp_emulator.py          # Built-in CP feature reimplementation
-│   ├── features_second_objs.py # Secondary-object features (vendored from brieflow)
-│   ├── custom_features.py      # User-registered per-cell features (vendored from brieflow)
-│   ├── feature_extraction.py   # extract_features(_bare) helpers (vendored from brieflow)
-│   ├── constants.py            # Column-order metadata (vendored from brieflow)
-│   ├── features_cp_measure.py  # cp_measure backend
-│   ├── features_cellprofiler.py # CellProfiler headless backend
-│   ├── feature_table_utils.py  # Region property utilities
 │   ├── gpu.py                  # GPU detection / diagnostics
 │   ├── notebook.py             # ipywidgets ParameterUI (notebook front-end)
-│   └── viz.py                  # Visualization utilities
+│   ├── viz.py                  # Visualization utilities
+│   └── brieflow/               # brieflow's phenotype lib, vendored verbatim (do not edit)
+├── scripts/sync_brieflow.py    # Re-vendors src/goudacell/brieflow at a brieflow commit
 ├── data/                       # Put test images here
 ├── configs/                    # Generated configs (segmentation_config.yaml)
 ├── out/                        # Batch masks + feature tables
@@ -49,7 +43,7 @@ uv pip install -e ".[cellpose3]"
 1. **Cellpose Version Detection**: Auto-detects version and validates model compatibility
 2. **Notebook generates configs**: No manual YAML editing needed
 3. **File Format Support**: ND2 (`nd2`), TIFF (`tifffile`), DV (`mrc`), OME-Zarr (`zarr`/`ome-zarr`)
-4. **Three extraction backends**: `cp_emulator` (built-in), `cp_measure` (lightweight), `cellprofiler` (headless CP-core)
+4. **Three extraction backends**: `cp_emulator` and `cp_measure` (brieflow's, vendored), `cellprofiler` (headless CP-core)
 5. **Zarr v3 / OME-NGFF v0.5**: Follows brieflow zarr3 patterns with pyramid generation
 
 ## CLI Commands
@@ -69,47 +63,56 @@ goudacell version                  # Check versions
 
 ## Brieflow parity
 
-GoudaCell's phenotype path must give the same masks and features as brieflow's for the same
-inputs and parameters. It is in parity with **brieflow `zarr3` @ `6beb71a`**
-(`6beb71a531022e117064e814e80998dd8f465b5f`); the operator surface and defaults follow
-brieflow-analysis `marimo` `analysis/3_phenotype.py` @ `e2a386b`.
+goudacell runs brieflow's phenotype code unchanged. `src/goudacell/brieflow/` holds brieflow's
+`workflow/lib` modules copied verbatim by `scripts/sync_brieflow.py`, whose only change is
+rewriting `lib.` imports to `goudacell.brieflow.`; the pinned commit is `BRIEFLOW_COMMIT` in
+`src/goudacell/brieflow/__init__.py` (**brieflow `zarr3` @ `f03a2c8`**). Never edit the vendored
+files: fix brieflow upstream, then re-sync. goudacell's own code is thin adapters that map its
+config onto the calls brieflow-analysis's `marimo` phenotype notebook
+(`analysis/3_phenotype.py`) makes, with that notebook's defaults in the UI.
 
-| brieflow (`workflow/`) | goudacell (`src/goudacell/`) |
+| Phenotype notebook cell (brieflow call) | goudacell adapter |
 |---|---|
-| `lib/shared/segment_cellpose.py` (`create_cellpose_model`, `prepare_cellpose`, `segment_cellpose_rgb`, `segment_cellpose_nuclei_rgb`, `estimate_diameters`) | `segment.py` (`create_cellpose_model`, `prepare_cellpose`, `segment_nuclei_and_cells`, `segment_nuclei`, `estimate_diameters`) |
-| `lib/shared/segmentation_utils.py` (`image_log_scale`, `reconcile_nuclei_cells`, `count_nuclei_per_cell`) | `segment.py` (same names) |
-| `lib/phenotype/identify_cytoplasm_cellpose.py` | `segment.py` `identify_cytoplasm` (vectorized, same result) |
-| `lib/external/cp_emulator.py`, `lib/shared/log_filter.py` | `cp_emulator.py` |
-| `lib/shared/feature_table_utils.py`, `lib/shared/feature_extraction.py` | `feature_table_utils.py`, `feature_extraction.py` |
-| `lib/phenotype/extract_phenotype_cp_emulator.py`, `constants.py` | `features.py` `extract_features` (cp_emulator path), `constants.py` |
-| `lib/phenotype/extract_phenotype_cp_measure.py` | `features_cp_measure.py` |
-| `lib/phenotype/custom_features.py` | `custom_features.py` (verbatim) |
-| `lib/phenotype/segment_secondary_object.py` | `secondary_objects.py` (verbatim minus microfilm plotting) |
-| `lib/phenotype/extract_phenotype_second_objs.py` | `features_second_objs.py` (verbatim) |
-| `scripts/phenotype/extract_phenotype.py` (`num_nuclei`), `merge_second_objs_phenotype_cp.py` | `features.py` `add_num_nuclei`, `merge_second_obj_summary`; `cli.py` |
-| `scripts/phenotype/identify_second_objs.py` | `cli.py` `segment_second_objects` |
+| Segmentation parameters: `estimate_diameters` | `segment.estimate_diameters` (UI "Estimate diameters") |
+| Segmentation: `segment_cellpose(..., cells=True)` | `segment.segment_nuclei_and_cells` (dual mode) |
+| Segmentation: `segment_cellpose(..., cells=False)` | `segment.segment_nuclei` (nuclei mode) |
+| Segmentation: `identify_cytoplasm_cellpose` | `segment.identify_cytoplasm` |
+| Diameters from masks (cpsam / Cellpose 4) | `segment.derive_diameters` |
+| Feature extraction: `extract_phenotype_cp_emulator` / `extract_phenotype_cp_measure` | `features.extract_features` |
+| Custom features: `register_custom_features` / `load_custom_features` | `ParameterUI.set_custom_features`, `cli` |
+| Secondary objects: `estimate_second_obj_diameter`, `segment_second_objs(_ml)` | `segment.segment_second_objects` (via `segment_second_objs_from_config`) |
+| Secondary-object features: `extract_phenotype_second_objs` | `features.extract_second_obj_features` |
+| brieflow scripts: `num_nuclei`, secondary-object summary merge | `features.add_num_nuclei`, `features.merge_second_obj_summary` |
 
-Intentional differences: no StarDist/watershed primary segmentation (TensorFlow dependency);
-the nuclei model is configurable (brieflow fixes `nuclei`/`cpsam`); the cp_measure backend
-tolerates a failing measurement instead of dropping the rest of its group; secondary-object
-nucleus distances key centroids by nucleus label; the dataclass default `reconcile` stays
-`consensus` (the UI defaults to brieflow's `contained_in_cells`). goudacell-only extras (cells
-mode, sweeps, channel/compartment subsets, CellProfiler backend) default to brieflow behaviour.
+Differences kept on purpose (goudacell-only options; the defaults are brieflow's behaviour):
+`remove_edge_cells: false` calls `prepare_cellpose` + `segment_cellpose_rgb`/`_nuclei_rgb` with
+`remove_edges=False` (brieflow always clears edges); `reconcile: null` gives no cytoplasm where
+brieflow's `identify_cytoplasm_cellpose` raises; feature `channels`, `compartments` and the
+texture/correlation/neighbor toggles select brieflow's per-compartment channel lists or drop
+columns from brieflow's table (no compute saved); cells-only mode, sweeps and the CellProfiler
+backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but ignored with a
+warning: brieflow segments nuclei with `nuclei` (Cellpose 3) or `cpsam` (Cellpose 4).
 
-`tests/test_brieflow_parity.py` runs both implementations on the same synthetic inputs
-(masks equal, feature columns equal, values equal) and pins a hash of every mapped brieflow
-file, so any upstream change to them fails the test until it is reviewed:
+To re-pin: `git -C <brieflow> fetch origin && git -C <brieflow> checkout <commit>`, then
+`python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`,
+and fails if a vendored module imports an unvendored one at module level: add it to
+`MODULES`). Review
+`git diff src/goudacell/brieflow`, adapt the adapters if a signature or default changed (compare
+the phenotype notebook's cells), then run the parity test against that checkout.
+
+`tests/test_brieflow_parity.py` checks that the vendored files equal brieflow's at the pin
+(`--check` does the same from the command line) and that goudacell's adapters, API and CLI give
+the same masks and feature tables as calling brieflow's functions directly, on synthetic masks
+and with Cellpose on a real phenotype crop (brieflow's small test data) or a synthetic tile:
 
 ```bash
-git -C /path/to/brieflow fetch origin
-git -C /path/to/brieflow worktree add --detach /path/to/brieflow-parity origin/zarr3
-BRIEFLOW_LIB=/path/to/brieflow-parity pytest tests/test_brieflow_parity.py -v
+python scripts/sync_brieflow.py --brieflow /path/to/brieflow --check
+BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v
 ```
 
-Run it on a compute node (it runs Cellpose on CPU). The cp_measure test needs `cp_measure`
-(`.[cp_measure]`, or run in a brieflow env with goudacell on `PYTHONPATH`). To move the pin:
-diff the changed files against the pinned commit, port what changes masks, features or
-parameters, then update `BRIEFLOW_COMMIT`, the hashes in the test, and the commit above.
+Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the phenotype image
+(`GOUDACELL_PARITY_CHANNELS="3,1"` its DAPI and cytoplasm channels); the cp_measure test needs
+`.[cp_measure]`.
 
 ## Running Tests
 

@@ -31,9 +31,9 @@ class FeatureExtractionParams:
         combined_output: Filename for the combined table (relative to output_dir).
         foci_channel: Channel index (or list of indices) for foci detection; None
             skips foci features. Indices refer to ``channels`` when that is set.
-        custom_features: Custom feature definitions from
-            :func:`goudacell.custom_features.register_custom_features` (cp_emulator
-            only), as brieflow's ``custom_features`` config key.
+        custom_features: Custom feature definitions from brieflow's
+            ``register_custom_features`` (cp_emulator only), as brieflow's
+            ``custom_features`` config key.
     """
 
     enabled: bool = False
@@ -91,7 +91,8 @@ class SecondaryObjectParams:
     """Secondary-object detection parameters, named as brieflow's phenotype config keys.
 
     Defaults are brieflow's phenotype notebook defaults. See
-    :mod:`goudacell.secondary_objects` for what each parameter does.
+    :mod:`goudacell.brieflow.phenotype.segment_secondary_object` for what each
+    parameter does.
 
     Attributes:
         second_obj_detection: Whether to detect secondary objects (dual mode only).
@@ -174,7 +175,7 @@ class SecondaryObjectParams:
         return {k: getattr(self, k) for k in keys}
 
     def to_brieflow_params(self, gpu: bool) -> dict:
-        """Parameters for :func:`goudacell.secondary_objects.segment_second_objs_from_config`.
+        """Parameters for brieflow's ``segment_second_objs_from_config``.
 
         Args:
             gpu: Whether the ML methods may use the GPU (brieflow's ``gpu`` key).

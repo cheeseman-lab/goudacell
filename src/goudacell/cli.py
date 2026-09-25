@@ -27,7 +27,7 @@ def _combine_feature_tables(frames):
 
 def _extract_features_for(fe, image, nuclei_masks, cell_masks):
     """Run feature extraction for one image using a FeatureExtractionParams."""
-    from goudacell.custom_features import load_custom_features
+    from goudacell.brieflow.phenotype.custom_features import load_custom_features
     from goudacell.features import extract_features
 
     return extract_features(
@@ -69,7 +69,10 @@ def _second_obj_foci_channel(fe):
 
 
 def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
-    """Detect secondary objects as brieflow's identify_second_objs rule.
+    """Detect secondary objects with brieflow's ``segment_second_objs_from_config``.
+
+    Nucleus centroids for the cell-nucleus distances come from the nuclei mask, as in
+    brieflow's phenotype notebook.
 
     Args:
         image: Multichannel image (C, H, W).
@@ -83,7 +86,9 @@ def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
     """
     from skimage.measure import regionprops
 
-    from goudacell.secondary_objects import segment_second_objs_from_config
+    from goudacell.brieflow.phenotype.segment_secondary_object import (
+        segment_second_objs_from_config,
+    )
     from goudacell.segment import identify_cytoplasm
 
     centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
@@ -97,8 +102,10 @@ def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
 
 
 def extract_second_obj_features(fe, image, second_obj_masks, second_obj_table):
-    """Per-object secondary-object features, as brieflow's extract_phenotype_second_objs."""
-    from goudacell.features_second_objs import extract_phenotype_second_objs
+    """Per-object secondary-object features from brieflow's ``extract_phenotype_second_objs``."""
+    from goudacell.brieflow.phenotype.extract_phenotype_second_objs import (
+        extract_phenotype_second_objs,
+    )
 
     return extract_phenotype_second_objs(
         image,
@@ -252,10 +259,8 @@ def segment(
                             f"({n_nuclei} nuclei, {n_cells} cells)",
                         )
                 else:
-                    # Single mode: nuclei or cells
+                    # Single mode: nuclei or cells (nuclei: brieflow's CELLPOSE_MODEL)
                     model = cfg.model
-                    if cfg.mode == "nuclei":
-                        model = "nuclei"
 
                     # Segment on the chosen channel, but keep the full image
                     # for feature extraction.
@@ -264,7 +269,7 @@ def segment(
                         seg_image = image[cfg.channel_to_segment]
 
                     if cfg.mode == "nuclei":
-                        # brieflow segment_cells=false: DAPI normalised as in dual mode
+                        # brieflow segment_cells=False
                         masks = segment_nuclei(
                             seg_image,
                             nuclei_channel=0,

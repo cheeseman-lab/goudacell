@@ -6,6 +6,11 @@ focused blocks — **data** (look at the image and its channels), **segment**
 (extract per-cell measurements), and **config** (name the run and generate its
 config). All heavy logic lives in the rest of the package, so this module is glue.
 
+Underneath, segmentation and feature extraction are brieflow's phenotype code
+(vendored in :mod:`goudacell.brieflow`), called as brieflow-analysis's phenotype
+notebook calls it. Options beyond the everyday ones (helper channel, secondary
+objects, foci and custom features) sit in collapsed sections.
+
 Usage in a notebook::
 
     from goudacell.notebook import ParameterUI
@@ -33,14 +38,20 @@ from goudacell.config import (
 
 COMPARTMENTS = ["nucleus", "cell", "cytoplasm"]
 METHODS = ["cp_emulator", "cp_measure", "cellprofiler"]
-RECONCILE_OPTIONS = [("contained_in_cells", "contained_in_cells"), ("consensus", "consensus"),
-                     ("none", None)]
+RECONCILE_OPTIONS = [
+    ("contained_in_cells", "contained_in_cells"),
+    ("consensus", "consensus"),
+    ("none", None),
+]
 
 # Cap on grid-sweep combinations rendered as overlays (keeps thumbnails legible).
 MAX_SWEEP_CELLS = 25
 
 # Backends fast enough to run live in the notebook preview; the rest are config-only.
 PREVIEW_METHODS = {"cp_emulator"}
+
+# Channel choices offered before an image is loaded (resized to the image on load).
+DEFAULT_N_CHANNELS = 8
 
 
 def available_feature_methods() -> List[str]:
@@ -63,7 +74,7 @@ def available_feature_methods() -> List[str]:
 FLOW_HELP = (
     "<i><b>flow_threshold</b> (0–1+): max allowed flow error per mask. "
     "Higher keeps more (lower-quality) masks → more objects; lower is stricter "
-    "→ fewer, cleaner objects. Default 0.4.</i>"
+    "→ fewer, cleaner objects. brieflow default: 0.4 nuclei, 1 cells.</i>"
 )
 CELLPROB_HELP = (
     "<i><b>cellprob_threshold</b> (−6…6): include pixels above this cell "
@@ -96,12 +107,6 @@ def _parse_float_list(text: str) -> List[float]:
     return [float(p) for p in text.replace(" ", "").split(",") if p != ""]
 
 
-def _parse_optional_int(text: str) -> Optional[int]:
-    """Parse "2" into 2; blank/"none" returns None."""
-    text = (text or "").strip()
-    return None if text.lower() in ("", "none") else int(text)
-
-
 def _parse_optional_float(text: str) -> Optional[float]:
     """Parse "12.5" into 12.5; blank/"none"/"auto" returns None."""
     text = (text or "").strip()
@@ -116,25 +121,44 @@ def _parse_foci(text: str):
     return channels[0] if len(channels) == 1 else channels
 
 
+def _is_cellpose_4x() -> bool:
+    """Whether Cellpose 4.x is installed (False when Cellpose is missing)."""
+    try:
+        from goudacell.segment import get_cellpose_version
+
+        return get_cellpose_version()[0] >= 4
+    except ImportError:
+        return False
+
+
 def _has_size_model(model: str) -> bool:
     """Whether Cellpose can estimate diameters for ``model`` (3.x, built-in, not cpsam)."""
-    from goudacell.segment import _is_custom_model, get_cellpose_version
+    from goudacell.segment import _is_custom_model
 
-    return (
-        get_cellpose_version()[0] < 4 and model != "cpsam" and not _is_custom_model(model)
-    )
+    return not _is_cellpose_4x() and model != "cpsam" and not _is_custom_model(model)
 
 
 def _default_models() -> tuple:
     """Pick (nuclei_model, cell_model) for the installed Cellpose version."""
-    try:
-        from goudacell.segment import get_cellpose_version
+    return ("cpsam", "cpsam") if _is_cellpose_4x() else ("nuclei", "cyto3")
 
-        if get_cellpose_version()[0] >= 4:
-            return "cpsam", "cpsam"
-    except Exception:
-        pass
-    return "nuclei", "cyto3"
+
+def _model_options(cellpose_4x: bool) -> List[str]:
+    """Built-in model names for the installed Cellpose version (custom paths typed in)."""
+    return ["cpsam"] if cellpose_4x else ["cyto3", "cyto2", "cyto", "nuclei"]
+
+
+def _channel_options(n_channels: int, allow_none: bool = False) -> list:
+    """Dropdown options for a channel index, optionally led by a "none" choice."""
+    options = [(str(i), i) for i in range(n_channels)]
+    return [("none", None)] + options if allow_none else options
+
+
+def _section(title: str, body: widgets.Widget) -> widgets.Accordion:
+    """A collapsed accordion holding one advanced section."""
+    accordion = widgets.Accordion(children=[body], selected_index=None)
+    accordion.set_title(0, title)
+    return accordion
 
 
 def _count(masks) -> int:
@@ -174,13 +198,14 @@ class ParameterUI:
             file_pattern: Glob pattern for listing images.
             output_dir: Where batch masks/features are written (in the config).
             config_dir: Where the generated config YAML is saved.
-            nuclei_model: Override the nuclei model (default: auto by version).
+            nuclei_model: Override the nuclei-only model (default: auto by version).
             cell_model: Override the cell model (default: auto by version).
         """
         self.input_dir = input_dir
         self.file_pattern = file_pattern
         self.output_dir = output_dir
         self.config_dir = config_dir
+        self._cellpose_4x = _is_cellpose_4x()
         auto_nuc, auto_cell = (None, None)
         if nuclei_model is None or cell_model is None:
             auto_nuc, auto_cell = _default_models()
@@ -200,7 +225,7 @@ class ParameterUI:
     # Widget construction
     # ------------------------------------------------------------------
     def _build_widgets(self) -> None:
-        """Construct all widgets and assemble the three block panels."""
+        """Construct all widgets and assemble the four block panels."""
         slider = dict(continuous_update=False, style={"description_width": "120px"})
         wide = widgets.Layout(width="340px")
         label_style = {"description_width": "120px"}
@@ -237,13 +262,19 @@ class ParameterUI:
         self.mode_w = widgets.ToggleButtons(
             options=["nuclei", "cells", "dual"], value="dual", description="Mode:"
         )
+        models = _model_options(self._cellpose_4x)
 
         self.nuc_channel = widgets.BoundedIntText(
             value=0, min=0, max=20, description="Nuclei channel:", style=label_style
         )
-        self.nuc_model_w = widgets.Text(
-            value=self._initial_models[0], description="Nuclei model:", style=label_style,
-            tooltip="nuclei / cpsam / path to a custom model",
+        self.nuc_model_w = widgets.Combobox(
+            value=self._initial_models[0], options=models, ensure_option=False,
+            description="Nuclei model:", placeholder="model name or path",
+            style=label_style,
+        )
+        self.nuc_model_note = widgets.HTML(
+            f"<i>Model: {self._dual_nuclei_model()} (brieflow's nuclei model in dual mode)"
+            "</i>"
         )
         self.nuc_diameter = widgets.FloatSlider(
             value=15.0, min=3, max=300, step=1, description="Nuclei diameter:", **slider
@@ -259,6 +290,7 @@ class ParameterUI:
                 widgets.HTML("<b>Nuclei</b>"),
                 self.nuc_channel,
                 self.nuc_model_w,
+                self.nuc_model_note,
                 self.nuc_diameter,
                 self.nuc_flow,
                 self.nuc_cellprob,
@@ -268,13 +300,10 @@ class ParameterUI:
         self.cell_channel = widgets.BoundedIntText(
             value=1, min=0, max=20, description="Cell channel:", style=label_style
         )
-        self.cell_model_w = widgets.Text(
-            value=self._initial_models[1], description="Cell model:", style=label_style,
-            tooltip="cyto3 / cpsam / path to a custom model",
-        )
-        self.helper_channel = widgets.Text(
-            value="", placeholder="none (e.g. 2)", description="Helper channel:",
-            style=label_style, tooltip="Optional red-plane channel for the Cellpose input",
+        self.cell_model_w = widgets.Combobox(
+            value=self._initial_models[1], options=models, ensure_option=False,
+            description="Cell model:", placeholder="model name or path",
+            style=label_style,
         )
         self.cell_diameter = widgets.FloatSlider(
             value=40.0, min=5, max=600, step=1, description="Cell diameter:", **slider
@@ -290,7 +319,6 @@ class ParameterUI:
                 widgets.HTML("<b>Cells</b>"),
                 self.cell_channel,
                 self.cell_model_w,
-                self.helper_channel,
                 self.cell_diameter,
                 self.cell_flow,
                 self.cell_cellprob,
@@ -306,6 +334,25 @@ class ParameterUI:
             description="Reconcile:",
             style=label_style,
             tooltip="Match nuclei to cells and drop nucleus-less cells",
+        )
+
+        # Advanced: the red plane of brieflow's Cellpose input
+        self.helper_channel = widgets.Dropdown(
+            options=_channel_options(DEFAULT_N_CHANNELS, allow_none=True), value=None,
+            description="Helper channel:", style=label_style,
+        )
+        self.seg_advanced = _section(
+            "Advanced segmentation",
+            widgets.VBox(
+                [
+                    widgets.HTML(
+                        "<i><b>Helper channel</b> fills the red plane of the Cellpose input "
+                        "(brieflow <code>HELPER_INDEX</code>); only cpsam reads it. "
+                        "<b>Cell model</b> also takes a path to a custom trained model.</i>"
+                    ),
+                    self.helper_channel,
+                ]
+            ),
         )
 
         self.estimate_btn = widgets.Button(
@@ -375,12 +422,12 @@ class ParameterUI:
                 self.help_box,
                 widgets.HBox([self.remove_edge, self.z_project, self.gpu]),
                 self.reconcile,
+                self.seg_advanced,
                 widgets.HBox([self.estimate_btn, self.run_btn]),
                 self.seg_output,
                 widgets.HTML("<hr>"),
                 self.sweep_box,
-                widgets.HTML("<hr>"),
-                self.second_obj_box,
+                self.second_obj_section,
             ]
         )
 
@@ -400,10 +447,6 @@ class ParameterUI:
         self.feat_channel_names = widgets.Text(
             value="", placeholder="auto (e.g. DAPI,GFP)", description="Names:"
         )
-        self.feat_foci = widgets.Text(
-            value="", placeholder="none (e.g. 2 or 2,3)", description="Foci channels:",
-            style={"description_width": "100px"},
-        )
         self.feat_compartments = widgets.SelectMultiple(
             options=COMPARTMENTS, value=tuple(COMPARTMENTS), description="Compartments:"
         )
@@ -412,6 +455,27 @@ class ParameterUI:
         self.feat_neighbors = widgets.Checkbox(value=True, description="Neighbors")
         self.feat_combine = widgets.Checkbox(
             value=False, description="Combine into one table (with filename)"
+        )
+
+        # Advanced: brieflow FOCI_CHANNEL and CUSTOM_FEATURES (cp_emulator only)
+        self.feat_foci = widgets.Text(
+            value="", placeholder="none (e.g. 2 or 2,3)", description="Foci channels:",
+            style=label_style,
+        )
+        self.custom_features_note = widgets.HTML(value=self._custom_features_html())
+        self.feat_advanced = _section(
+            "Foci and custom features",
+            widgets.VBox(
+                [
+                    widgets.HTML(
+                        "<i><b>Foci channels</b>: brieflow's foci count/area per cell for "
+                        "each listed channel (indices into <i>Channels</i> when set). "
+                        "Both need the <code>cp_emulator</code> method.</i>"
+                    ),
+                    self.feat_foci,
+                    self.custom_features_note,
+                ]
+            ),
         )
         self.preview_feat_btn = widgets.Button(description="Preview features", icon="table")
         self.feat_output = widgets.Output()
@@ -423,10 +487,10 @@ class ParameterUI:
                 self.feat_method,
                 self.feat_method_note,
                 widgets.HBox([self.feat_channels, self.feat_channel_names]),
-                self.feat_foci,
                 self.feat_compartments,
                 widgets.HBox([self.feat_texture, self.feat_correlation, self.feat_neighbors]),
                 self.feat_combine,
+                self.feat_advanced,
                 self.preview_feat_btn,
                 self.feat_output,
             ]
@@ -480,42 +544,76 @@ class ParameterUI:
             options=["threshold", "cellpose", "stardist"], value=d.second_obj_method,
             description="Method:", **text,
         )
-        self.so_min_size = widgets.FloatText(value=d.second_obj_min_size, description="Min size:",
-                                             **text)
-        self.so_max_size = widgets.FloatText(value=d.second_obj_max_size, description="Max size:",
-                                             **text)
+
+        # Size filtering and cell association (all methods)
+        self.so_min_size = widgets.FloatText(
+            value=d.second_obj_min_size, description="Min size:", **text
+        )
+        self.so_max_size = widgets.FloatText(
+            value=d.second_obj_max_size, description="Max size:", **text
+        )
         self.so_size_filter = widgets.Dropdown(
-            options=["feret", "area"], value=d.size_filter_method, description="Size filter:",
+            options=["feret", "area"], value=d.size_filter_method, description="Size as:",
             **text,
         )
         self.so_max_per_cell = widgets.IntText(
             value=d.max_objects_per_cell, description="Max per cell:", **text
         )
-        self.so_overlap = widgets.FloatText(value=d.overlap_threshold, description="Overlap:",
-                                            **text)
-        self.so_max_total = widgets.IntText(value=d.max_total_objects, description="Max total:",
-                                            **text)
+        self.so_overlap = widgets.FloatText(
+            value=d.overlap_threshold, description="Min overlap:", **text
+        )
+        self.so_max_total = widgets.IntText(
+            value=d.max_total_objects, description="Max per tile:", **text
+        )
+        size_box = widgets.VBox(
+            [
+                widgets.HTML("<b>Size and cell association</b>"),
+                widgets.HBox([self.so_min_size, self.so_max_size]),
+                widgets.HBox([self.so_size_filter, self.so_overlap]),
+                widgets.HBox([self.so_max_per_cell, self.so_max_total]),
+            ]
+        )
+
         # Cellpose
-        self.so_cp_model = widgets.Text(value=d.second_obj_cellpose_model, description="Model:",
-                                        **text)
-        self.so_diameter = widgets.Text(value="", placeholder="auto (estimate)",
-                                        description="Diameter:", **text)
-        self.so_flow = widgets.FloatText(value=d.second_obj_flow_threshold, description="Flow:",
-                                         **text)
+        self.so_cp_model = widgets.Combobox(
+            value=d.second_obj_cellpose_model, options=_model_options(self._cellpose_4x),
+            ensure_option=False, description="Model:", **text,
+        )
+        self.so_diameter = widgets.Text(
+            value="", placeholder="auto (estimate)", description="Diameter:", **text
+        )
+        self.so_flow = widgets.FloatText(
+            value=d.second_obj_flow_threshold, description="Flow:", **text
+        )
         self.so_cellprob = widgets.FloatText(
             value=d.second_obj_cellprob_threshold, description="Cellprob:", **text
         )
         self.so_cellpose_box = widgets.VBox(
-            [self.so_cp_model, self.so_diameter, self.so_flow, self.so_cellprob]
+            [
+                widgets.HTML("<b>Cellpose</b>"),
+                widgets.HBox([self.so_cp_model, self.so_diameter]),
+                widgets.HBox([self.so_flow, self.so_cellprob]),
+            ]
         )
+
         # StarDist
-        self.so_sd_model = widgets.Text(value=d.second_obj_stardist_model, description="Model:",
-                                        **text)
-        self.so_prob = widgets.FloatText(value=d.second_obj_prob_threshold, description="Prob:",
-                                         **text)
-        self.so_nms = widgets.FloatText(value=d.second_obj_nms_threshold, description="NMS:",
-                                        **text)
-        self.so_stardist_box = widgets.VBox([self.so_sd_model, self.so_prob, self.so_nms])
+        self.so_sd_model = widgets.Text(
+            value=d.second_obj_stardist_model, description="Model:", **text
+        )
+        self.so_prob = widgets.FloatText(
+            value=d.second_obj_prob_threshold, description="Prob:", **text
+        )
+        self.so_nms = widgets.FloatText(
+            value=d.second_obj_nms_threshold, description="NMS:", **text
+        )
+        self.so_stardist_box = widgets.VBox(
+            [
+                widgets.HTML("<b>StarDist</b> <i>(needs the stardist package)</i>"),
+                self.so_sd_model,
+                widgets.HBox([self.so_prob, self.so_nms]),
+            ]
+        )
+
         # Threshold
         self.so_smoothing = widgets.FloatText(
             value=d.threshold_smoothing_scale, description="Smoothing:", **text
@@ -525,10 +623,12 @@ class ParameterUI:
                      "min_cross_entropy"],
             value=d.threshold_method, description="Threshold:", **text,
         )
-        self.so_opening = widgets.Checkbox(value=d.use_morphological_opening,
-                                           description="Morphological opening")
-        self.so_opening_radius = widgets.IntText(value=d.opening_disk_radius,
-                                                 description="Opening radius:", **text)
+        self.so_opening = widgets.Checkbox(
+            value=d.use_morphological_opening, description="Morphological opening"
+        )
+        self.so_opening_radius = widgets.IntText(
+            value=d.opening_disk_radius, description="Opening radius:", **text
+        )
         self.so_fill_holes = widgets.Dropdown(
             options=["threshold", "declump", "both", "none"], value=d.fill_holes,
             description="Fill holes:", **text,
@@ -541,42 +641,58 @@ class ParameterUI:
             options=["watershed", "propagate", "none"], value=d.declump_mode,
             description="Declump mode:", **text,
         )
-        self.so_suppress = widgets.IntText(value=d.suppress_local_maxima,
-                                           description="Suppress maxima:", **text)
-        self.so_maxima_reduction = widgets.Text(value="", placeholder="none (0-1)",
-                                                description="Maxima reduction:", **text)
-        self.so_shape_refine = widgets.Checkbox(value=d.use_shape_refinement,
-                                                description="Shape refinement")
-        self.so_proportion = widgets.FloatText(value=d.proportion_threshold,
-                                               description="Proportion:", **text)
+        self.so_suppress = widgets.IntText(
+            value=d.suppress_local_maxima, description="Maxima spacing:", **text
+        )
+        self.so_maxima_reduction = widgets.Text(
+            value="", placeholder="none (0-1)", description="Maxima reduction:", **text
+        )
+        self.so_shape_refine = widgets.Checkbox(
+            value=d.use_shape_refinement, description="Shape refinement"
+        )
+        self.so_proportion = widgets.FloatText(
+            value=d.proportion_threshold, description="Proportion:", **text
+        )
         self.so_threshold_box = widgets.VBox(
             [
-                self.so_smoothing, self.so_thresh_method,
-                widgets.HBox([self.so_opening, self.so_opening_radius]),
-                self.so_fill_holes, self.so_declump_method, self.so_declump_mode,
-                self.so_suppress, self.so_maxima_reduction,
-                widgets.HBox([self.so_shape_refine, self.so_proportion]),
+                widgets.HTML("<b>Threshold</b>"),
+                widgets.HBox([self.so_thresh_method, self.so_smoothing]),
+                widgets.HBox([self.so_fill_holes, self.so_opening_radius, self.so_opening]),
+                widgets.HBox([self.so_declump_method, self.so_declump_mode]),
+                widgets.HBox([self.so_suppress, self.so_maxima_reduction]),
+                widgets.HBox([self.so_proportion, self.so_shape_refine]),
             ]
         )
-        self.so_run_btn = widgets.Button(description="Preview secondary objects", icon="play",
-                                         tooltip="Needs a dual-mode preview first")
+
+        self.so_run_btn = widgets.Button(
+            description="Preview objects", icon="play",
+            tooltip="Needs a dual-mode preview first",
+        )
         self.so_output = widgets.Output()
-        self.second_obj_box = widgets.VBox(
+        self.so_params_box = widgets.VBox(
             [
-                widgets.HTML(
-                    "<b>Secondary objects</b> — objects inside cells (pathogens, organelles, "
-                    "foci), as brieflow's secondary-object detection. Dual mode only."
-                ),
-                self.so_enabled,
                 widgets.HBox([self.so_channel, self.so_method]),
-                widgets.HBox([self.so_min_size, self.so_max_size, self.so_size_filter]),
-                widgets.HBox([self.so_max_per_cell, self.so_overlap, self.so_max_total]),
+                size_box,
                 self.so_cellpose_box,
                 self.so_stardist_box,
                 self.so_threshold_box,
                 self.so_run_btn,
                 self.so_output,
             ]
+        )
+        self.second_obj_section = _section(
+            "Secondary objects (optional)",
+            widgets.VBox(
+                [
+                    widgets.HTML(
+                        "<i>Objects inside cells (pathogens, organelles, foci), detected with "
+                        "brieflow's secondary-object step on the reconciled cells. Dual mode "
+                        "only; defaults are brieflow's.</i>"
+                    ),
+                    self.so_enabled,
+                    self.so_params_box,
+                ]
+            ),
         )
 
     def _wire_events(self) -> None:
@@ -589,6 +705,7 @@ class ParameterUI:
         self.sweep_btn.on_click(self._on_sweep)
         self.sweep_apply_btn.on_click(self._on_apply_sweep)
         self.preview_feat_btn.on_click(self._on_preview_features)
+        self.so_enabled.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_run_btn.on_click(self._on_second_objs)
         self.config_btn.on_click(self._on_generate)
@@ -596,13 +713,18 @@ class ParameterUI:
     def _sync_mode_visibility(self) -> None:
         """Show only the controls relevant to the selected mode."""
         mode = self.mode_w.value
+        dual = mode == "dual"
         self.nuclei_box.layout.display = "" if mode in ("nuclei", "dual") else "none"
         self.cell_box.layout.display = "" if mode in ("cells", "dual") else "none"
+        # In dual mode brieflow picks the nuclei model; nuclei-only takes any model.
+        self.nuc_model_w.layout.display = "" if mode == "nuclei" else "none"
+        self.nuc_model_note.layout.display = "" if dual else "none"
         # Reconcile, helper, sweep target and secondary objects only matter in dual mode.
-        self.reconcile.layout.display = "" if mode == "dual" else "none"
-        self.helper_channel.layout.display = "" if mode == "dual" else "none"
-        self.sweep_target.layout.display = "" if mode == "dual" else "none"
-        self.second_obj_box.layout.display = "" if mode == "dual" else "none"
+        self.reconcile.layout.display = "" if dual else "none"
+        self.seg_advanced.layout.display = "" if dual else "none"
+        self.sweep_target.layout.display = "" if dual else "none"
+        self.second_obj_section.layout.display = "" if dual else "none"
+        self.so_params_box.layout.display = "" if self.so_enabled.value else "none"
         method = self.so_method.value
         self.so_cellpose_box.layout.display = "" if method == "cellpose" else "none"
         self.so_stardist_box.layout.display = "" if method == "stardist" else "none"
@@ -629,12 +751,31 @@ class ParameterUI:
             f"background:#f6f8fa'>{mark} <b>GPU:</b> {status.reason}</div>"
         )
 
+    def _custom_features_html(self) -> str:
+        """Describe the registered custom features (or how to register them)."""
+        if not self.custom_feature_definitions:
+            return (
+                "<i><b>Custom features</b>: none registered. Define self-contained "
+                "functions and call <code>ui.set_custom_features([fn, (fn2, \"cell\")])</code>"
+                " in a notebook cell.</i>"
+            )
+        columns = "".join(
+            f"<li><code>{d['column']}</code></li>" for d in self.custom_feature_definitions
+        )
+        return f"<b>Custom features</b> ({len(self.custom_feature_definitions)}):<ul>{columns}</ul>"
+
     # ------------------------------------------------------------------
     # Logic (testable without a frontend)
     # ------------------------------------------------------------------
+    def _dual_nuclei_model(self) -> str:
+        """The model brieflow segments nuclei with in dual mode (nuclei, or cpsam on 4.x)."""
+        return "cpsam" if self._cellpose_4x else "nuclei"
+
     @property
     def nuclei_model(self) -> str:
-        """Nuclei Cellpose model (built-in name or custom model path)."""
+        """Nuclei model: brieflow's in dual mode, the chosen one for nuclei-only."""
+        if self.mode_w.value == "dual":
+            return self._dual_nuclei_model()
         return self.nuc_model_w.value.strip()
 
     @property
@@ -655,11 +796,15 @@ class ParameterUI:
         Args:
             features: Feature functions or (function, compartment) pairs; [] clears.
         """
-        from goudacell.custom_features import load_custom_features, register_custom_features
+        from goudacell.brieflow.phenotype.custom_features import (
+            load_custom_features,
+            register_custom_features,
+        )
 
         definitions = register_custom_features(features)
         load_custom_features(definitions)  # fail here, not in the batch job
         self.custom_feature_definitions = definitions
+        self.custom_features_note.value = self._custom_features_html()
         for definition in definitions:
             print(f"  {definition['column']}")
 
@@ -735,7 +880,7 @@ class ParameterUI:
             nuclei_cellprob_threshold=self.nuc_cellprob.value,
             cell_flow_threshold=self.cell_flow.value,
             cell_cellprob_threshold=self.cell_cellprob.value,
-            helper_channel=_parse_optional_int(self.helper_channel.value),
+            helper_channel=self.helper_channel.value,
         )
 
     def build_config(self) -> SegmentationConfig:
@@ -805,9 +950,11 @@ class ParameterUI:
         return params
 
     def _estimate_second_obj_diameter(self, params: SecondaryObjectParams) -> Optional[float]:
-        """Estimate the secondary-object diameter as brieflow's notebook (#111 guard)."""
+        """Estimate the secondary-object diameter as brieflow's phenotype notebook does."""
+        from goudacell.brieflow.phenotype.segment_secondary_object import (
+            estimate_second_obj_diameter,
+        )
         from goudacell.gpu import resolve_gpu
-        from goudacell.secondary_objects import estimate_second_obj_diameter
 
         image = self._require_image()
         if image is None:
@@ -854,6 +1001,11 @@ class ParameterUI:
             # Update channel selectors to the real channel count.
             for sel in (self.nuc_channel, self.cell_channel, self.so_channel):
                 sel.max = max(0, n_channels - 1)
+            helper = self.helper_channel.value
+            self.helper_channel.options = _channel_options(n_channels, allow_none=True)
+            if helper is not None and helper >= n_channels:
+                helper = None
+            self.helper_channel.value = helper
 
             fig, axes = plt.subplots(1, n_channels, figsize=(4 * n_channels, 4))
             axes = [axes] if n_channels == 1 else list(axes)
@@ -869,9 +1021,9 @@ class ParameterUI:
     def _on_estimate(self, _btn) -> None:
         """Estimate diameters as brieflow's phenotype notebook and fill the sliders.
 
-        Built-in Cellpose 3.x models use the size model on the prepared RGB image
-        (brieflow ``estimate_diameters``); cpsam, custom models and Cellpose 4.x segment
-        once with ``diameter=None`` and measure the mean object diameter.
+        Built-in Cellpose 3.x models use brieflow's ``estimate_diameters`` (size model on
+        the prepared RGB image); cpsam, custom models and Cellpose 4.x segment once with
+        ``diameter=None`` and measure the mean object diameter.
         """
         from goudacell.gpu import resolve_gpu
         from goudacell.segment import (
@@ -901,7 +1053,7 @@ class ParameterUI:
                 print(f"Estimated cell diameter: {self.cell_diameter.value:.1f}")
                 return
 
-            # brieflow estimates with the size model unless the cell model is cpsam
+            # brieflow estimates with the size model unless the model has none
             nuc_ch = self.nuc_channel.value
             if mode == "dual":
                 cyto_ch, size_cell_model = self.cell_channel.value, self.cell_model
@@ -909,23 +1061,22 @@ class ParameterUI:
                 cyto_ch, size_cell_model = nuc_ch, "cyto3"
             model = self.cell_model if mode == "dual" else self.nuclei_model
             if _has_size_model(model):
+                helper = self.helper_channel.value if mode == "dual" else None
                 nuc_d, cell_d = estimate_diameters(
                     image, nuc_ch, cyto_ch, cell_model=size_cell_model,
-                    helper_channel=_parse_optional_int(self.helper_channel.value),
-                    gpu=use_gpu,
+                    helper_channel=helper, gpu=use_gpu,
                 )
                 source = "size model"
             elif mode == "dual":
                 nuclei, cells = segment_nuclei_and_cells(
                     image, nuclei_channel=nuc_ch, cyto_channel=self.cell_channel.value,
                     nuclei_diameter=None, cell_diameter=None, cell_model=self.cell_model,
-                    nuclei_model=self.nuclei_model,
                     nuclei_flow_threshold=self.nuc_flow.value,
                     nuclei_cellprob_threshold=self.nuc_cellprob.value,
                     cell_flow_threshold=self.cell_flow.value,
                     cell_cellprob_threshold=self.cell_cellprob.value, gpu=use_gpu,
                     reconcile=self.reconcile.value,
-                    helper_channel=_parse_optional_int(self.helper_channel.value),
+                    helper_channel=self.helper_channel.value,
                 )
                 nuc_d, cell_d = derive_diameters(nuclei, cells)
                 source = "mean object diameter (diameter-free run)"
@@ -971,7 +1122,6 @@ class ParameterUI:
                     nuclei_diameter=self.nuc_diameter.value,
                     cell_diameter=self.cell_diameter.value,
                     cell_model=self.cell_model,
-                    nuclei_model=self.nuclei_model,
                     nuclei_flow_threshold=self.nuc_flow.value,
                     nuclei_cellprob_threshold=self.nuc_cellprob.value,
                     cell_flow_threshold=self.cell_flow.value,
@@ -979,7 +1129,7 @@ class ParameterUI:
                     gpu=use_gpu,
                     remove_edge_cells=self.remove_edge.value,
                     reconcile=self.reconcile.value,
-                    helper_channel=_parse_optional_int(self.helper_channel.value),
+                    helper_channel=self.helper_channel.value,
                     return_nuclei_per_cell=True,
                 )
                 panels = [
@@ -1041,7 +1191,7 @@ class ParameterUI:
             if params.second_obj_method == "cellpose" and params.second_obj_diameter is None:
                 params.second_obj_diameter = self._estimate_second_obj_diameter(params)
                 if params.second_obj_diameter is not None:
-                    self.so_diameter.value = str(params.second_obj_diameter)
+                    self.so_diameter.value = f"{params.second_obj_diameter:.1f}"
             masks, table, _ = segment_second_objects(
                 self.image, nuclei, cells, params, resolve_gpu(self.gpu.value)
             )
@@ -1183,13 +1333,9 @@ class ParameterUI:
 
     def _on_preview_features(self, _btn) -> None:
         """Run a feature-extraction preview on the last previewed masks."""
+        from goudacell import features as features_mod
+        from goudacell.brieflow.phenotype.custom_features import load_custom_features
         from goudacell.cli import extract_second_obj_features
-        from goudacell.custom_features import load_custom_features
-        from goudacell.features import (
-            add_num_nuclei,
-            extract_features,
-            merge_second_obj_summary,
-        )
 
         self.feat_output.clear_output(wait=True)
         with self.feat_output:
@@ -1212,8 +1358,8 @@ class ParameterUI:
                 self.image.shape[0] if self.image.ndim == 3 else 1
             )
             if fe.include_correlation and n_ch < 2:
-                print("Note: correlation needs ≥2 channels — skipped for this selection.")
-            df = extract_features(
+                print("Note: correlation needs ≥2 channels — none for this selection.")
+            df = features_mod.extract_features(
                 self.image, nuclei_masks=nuclei, cell_masks=cells,
                 channel_names=fe.channel_names, channels=fe.channels,
                 compartments=fe.compartments, include_texture=fe.include_texture,
@@ -1222,10 +1368,10 @@ class ParameterUI:
                 method=fe.method, custom_features=load_custom_features(fe.custom_features),
             )
             if self._last_nuclei_per_cell is not None:
-                df = add_num_nuclei(df, self._last_nuclei_per_cell)
+                df = features_mod.add_num_nuclei(df, self._last_nuclei_per_cell)
             second = self._last_second_objs if self.so_enabled.value else None
             if second is not None:
-                df = merge_second_obj_summary(df, second[1]["cell_summary"])
+                df = features_mod.merge_second_obj_summary(df, second[1]["cell_summary"])
             print(f"Features: {len(df)} objects × {len(df.columns)} columns")
             try:
                 from IPython.display import display

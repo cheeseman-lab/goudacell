@@ -48,75 +48,6 @@ def _extract_features_for(fe, image, nuclei_masks, cell_masks):
     )
 
 
-def _full_channel_names(fe, image):
-    """Channel names for every channel of ``image`` (secondary objects use them all)."""
-    n_channels = image.shape[0] if image.ndim == 3 else 1
-    if fe.channel_names is not None and len(fe.channel_names) == n_channels:
-        return list(fe.channel_names)
-    return [f"ch{i}" for i in range(n_channels)]
-
-
-def _second_obj_foci_channel(fe):
-    """Map the feature foci channel to a full-image index for secondary objects."""
-    fc = fe.foci_channel
-    if isinstance(fc, list):
-        if len(fc) != 1:
-            raise ValueError("Secondary-object foci take a single foci channel (as brieflow)")
-        fc = fc[0]
-    if fc is not None and fe.channels:
-        fc = fe.channels[fc]
-    return fc
-
-
-def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
-    """Detect secondary objects with brieflow's ``segment_second_objs_from_config``.
-
-    Nucleus centroids for the cell-nucleus distances come from the nuclei mask, as in
-    brieflow's phenotype notebook.
-
-    Args:
-        image: Multichannel image (C, H, W).
-        nuclei_masks: Reconciled nuclei mask (centroids for nucleus distances).
-        cell_masks: Reconciled cell mask.
-        params: SecondaryObjectParams.
-        gpu: Whether the ML methods may use the GPU.
-
-    Returns:
-        Tuple of (second_obj_masks, cell_second_obj_table, updated_cytoplasm_masks).
-    """
-    from skimage.measure import regionprops
-
-    from goudacell.brieflow.phenotype.segment_secondary_object import (
-        segment_second_objs_from_config,
-    )
-    from goudacell.segment import identify_cytoplasm
-
-    centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
-    return segment_second_objs_from_config(
-        image=image,
-        cell_masks=cell_masks,
-        cytoplasm_masks=identify_cytoplasm(nuclei_masks, cell_masks),
-        second_obj_params=params.to_brieflow_params(gpu),
-        nuclei_centroids=centroids,
-    )
-
-
-def extract_second_obj_features(fe, image, second_obj_masks, second_obj_table):
-    """Per-object secondary-object features from brieflow's ``extract_phenotype_second_objs``."""
-    from goudacell.brieflow.phenotype.extract_phenotype_second_objs import (
-        extract_phenotype_second_objs,
-    )
-
-    return extract_phenotype_second_objs(
-        image,
-        second_objs=second_obj_masks,
-        wildcards={},
-        second_obj_cell_mapping_df=second_obj_table["second_obj_cell_mapping"],
-        foci_channel=_second_obj_foci_channel(fe),
-        channel_names=_full_channel_names(fe, image),
-    )
-
-
 @app.command()
 def segment(
     config: Path = typer.Argument(..., help="Path to YAML configuration file"),
@@ -124,10 +55,14 @@ def segment(
 ) -> None:
     """Run batch segmentation using a YAML config file."""
     from goudacell.config import SegmentationConfig
-    from goudacell.features import add_num_nuclei, merge_second_obj_summary
+    from goudacell.features import (
+        add_num_nuclei,
+        extract_second_obj_features,
+        merge_second_obj_summary,
+    )
     from goudacell.io import load_image, save_mask
     from goudacell.segment import segment as run_segment
-    from goudacell.segment import segment_nuclei, segment_nuclei_and_cells
+    from goudacell.segment import segment_nuclei, segment_nuclei_and_cells, segment_second_objects
 
     # Load config
     cfg = SegmentationConfig.from_yaml(config)

@@ -1177,8 +1177,8 @@ class ParameterUI:
         """Detect secondary objects on the last dual-mode preview and show an overlay."""
         import matplotlib.pyplot as plt
 
-        from goudacell.cli import segment_second_objects
         from goudacell.gpu import resolve_gpu
+        from goudacell.segment import segment_second_objects
         from goudacell.viz import make_mask_cmap
 
         self.so_output.clear_output(wait=True)
@@ -1335,7 +1335,7 @@ class ParameterUI:
         """Run a feature-extraction preview on the last previewed masks."""
         from goudacell import features as features_mod
         from goudacell.brieflow.phenotype.custom_features import load_custom_features
-        from goudacell.cli import extract_second_obj_features
+        from goudacell.features import extract_second_obj_features
 
         self.feat_output.clear_output(wait=True)
         with self.feat_output:

@@ -223,6 +223,42 @@ def _keep_compartments(df: pd.DataFrame, compartments: Optional[List[str]]) -> p
     return df[[c for c in df.columns if not c.startswith(dropped)]] if dropped else df
 
 
+def _second_obj_channel_names(fe, image):
+    """Channel names for every channel of ``image`` (secondary objects use them all)."""
+    n_channels = image.shape[0] if image.ndim == 3 else 1
+    if fe.channel_names is not None and len(fe.channel_names) == n_channels:
+        return list(fe.channel_names)
+    return [f"ch{i}" for i in range(n_channels)]
+
+
+def _second_obj_foci_channel(fe):
+    """Map the feature foci channel to a full-image index for secondary objects."""
+    fc = fe.foci_channel
+    if isinstance(fc, list):
+        if len(fc) != 1:
+            raise ValueError("Secondary-object foci take a single foci channel (as brieflow)")
+        fc = fc[0]
+    if fc is not None and fe.channels:
+        fc = fe.channels[fc]
+    return fc
+
+
+def extract_second_obj_features(fe, image, second_obj_masks, second_obj_table):
+    """Per-object secondary-object features from brieflow's ``extract_phenotype_second_objs``."""
+    from goudacell.brieflow.phenotype.extract_phenotype_second_objs import (
+        extract_phenotype_second_objs,
+    )
+
+    return extract_phenotype_second_objs(
+        image,
+        second_objs=second_obj_masks,
+        wildcards={},
+        second_obj_cell_mapping_df=second_obj_table["second_obj_cell_mapping"],
+        foci_channel=_second_obj_foci_channel(fe),
+        channel_names=_second_obj_channel_names(fe, image),
+    )
+
+
 def add_num_nuclei(df: pd.DataFrame, nuclei_per_cell: dict) -> pd.DataFrame:
     """Attach the per-cell nuclei count, defaulting to 1 where a cell has no entry.
 

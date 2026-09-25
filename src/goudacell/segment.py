@@ -338,6 +338,36 @@ def identify_cytoplasm(nuclei: np.ndarray, cells: np.ndarray) -> Optional[np.nda
     return identify_cytoplasm_cellpose(nuclei, cells)
 
 
+def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
+    """Detect secondary objects with brieflow's ``segment_second_objs_from_config``.
+
+    Nucleus centroids for the cell-nucleus distances come from the nuclei mask, as in
+    brieflow's phenotype notebook.
+
+    Args:
+        image: Multichannel image (C, H, W).
+        nuclei_masks: Reconciled nuclei mask (centroids for nucleus distances).
+        cell_masks: Reconciled cell mask.
+        params: SecondaryObjectParams.
+        gpu: Whether the ML methods may use the GPU.
+
+    Returns:
+        Tuple of (second_obj_masks, cell_second_obj_table, updated_cytoplasm_masks).
+    """
+    from goudacell.brieflow.phenotype.segment_secondary_object import (
+        segment_second_objs_from_config,
+    )
+
+    centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
+    return segment_second_objs_from_config(
+        image=image,
+        cell_masks=cell_masks,
+        cytoplasm_masks=identify_cytoplasm(nuclei_masks, cell_masks),
+        second_obj_params=params.to_brieflow_params(gpu),
+        nuclei_centroids=centroids,
+    )
+
+
 # Parameters that can be swept, mapped to the attribute suffix they override.
 SWEEP_PARAM_SUFFIX = {
     "diameter": "diameter",

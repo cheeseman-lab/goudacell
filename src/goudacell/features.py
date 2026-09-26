@@ -45,7 +45,7 @@ def extract_features(
     foci_channel: Optional[Union[int, List[int]]] = None,
     method: str = "cp_emulator",
     pipeline_file: Optional[str] = None,
-    cellprofiler_cmd: str = "cellprofiler",
+    cellprofiler_cmd: Optional[str] = None,
     custom_features: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Extract CellProfiler-style features from a segmented image.
@@ -54,7 +54,7 @@ def extract_features(
     - "cp_emulator" (default): brieflow's ``extract_phenotype_cp_emulator``.
     - "cp_measure": brieflow's ``extract_phenotype_cp_measure`` (requires `.[cp_measure]`).
     - "cellprofiler": Runs CellProfiler headlessly via CLI subprocess.
-      Requires cellprofiler in PATH and a .cppipe pipeline file.
+      Requires a CellProfiler install; runs a .cppipe pipeline file or goudacell's default.
 
     With the defaults, the cp_emulator table is exactly brieflow's for the same masks.
 
@@ -81,8 +81,10 @@ def extract_features(
             features (cp_emulator only).
         method: Extraction backend. One of "cp_emulator", "cp_measure",
             or "cellprofiler".
-        pipeline_file: Path to .cppipe file (cellprofiler method only).
-        cellprofiler_cmd: CellProfiler executable (cellprofiler method only).
+        pipeline_file: Path to .cppipe file (cellprofiler method only); None runs
+            goudacell's default pipeline.
+        cellprofiler_cmd: CellProfiler executable (cellprofiler method only); None finds
+            one (``features_cellprofiler.find_cellprofiler``).
         custom_features: Per-compartment custom features as returned by brieflow's
             ``load_custom_features``, each measured on the full multichannel image
             (channel order of the input). cp_emulator only.

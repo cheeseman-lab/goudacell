@@ -61,9 +61,8 @@ cp_measure = [
     "cp-measure==0.1.18",
 ]
 # CellProfiler headless - no Python deps needed, runs via CLI subprocess.
-# Install CellProfiler in a separate conda env (Python 3.9, numpy<2) and provide the path:
-#   conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
-#   cellprofiler_cmd: /path/to/cellprofiler-env/bin/cellprofiler
+# CellProfiler lives in its own conda env (Python 3.9, numpy<2), found by itself once made:
+#   bash scripts/setup_cellprofiler_env.sh   # envs/cellprofiler.yml -> goudacell_cp
 
 [project.scripts]
 goudacell = "goudacell.cli:app"
@@ -75,7 +74,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-goudacell = ["brieflow/LICENSE"]
+goudacell = ["brieflow/LICENSE", "data/*.cppipe"]
 
 [tool.ruff]
 line-length = 100
@@ -87,6 +86,7 @@ select = ["E", "F", "I", "D"]
 pydocstyle = { convention = "google" }
 
 [tool.ruff.lint.per-file-ignores]
+"src/goudacell/__init__.py" = ["E402"]
 "tests/*.py" = ["D100", "D103"]
 "notebooks/*.py" = ["D100", "D103"]
 "*.ipynb" = ["D100", "D103"]

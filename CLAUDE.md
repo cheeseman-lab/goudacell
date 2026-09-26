@@ -15,13 +15,17 @@ goudacell/
 │   ├── segment.py              # Segmentation adapters over brieflow (+ sweeps, cells mode)
 │   ├── features.py             # Feature-extraction adapters over brieflow
 │   ├── features_cellprofiler.py # CellProfiler headless backend (goudacell-only)
+│   ├── environment.py          # Wrong-env check (stdlib only), run on `import goudacell`
 │   ├── config.py               # YAML config handling
 │   ├── cli.py                  # CLI entry point
 │   ├── gpu.py                  # GPU detection / diagnostics
 │   ├── notebook.py             # ipywidgets ParameterUI (notebook front-end)
 │   ├── viz.py                  # Visualization utilities
+│   ├── data/goudacell_default.cppipe # Default CellProfiler pipeline (template)
 │   └── brieflow/               # brieflow's phenotype lib, vendored verbatim (do not edit)
 ├── scripts/sync_brieflow.py    # Re-vendors src/goudacell/brieflow at a brieflow commit
+├── scripts/setup_cellprofiler_env.sh # Creates the goudacell_cp CellProfiler env
+├── envs/cellprofiler.yml       # goudacell_cp env spec (CellProfiler 4.2.8.1, Python 3.9)
 ├── data/                       # Put test images here
 ├── configs/                    # Generated configs (segmentation_config.yaml)
 ├── out/                        # Batch masks + feature tables
@@ -122,21 +126,35 @@ Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the ph
 label), runs `cellprofiler -c -r -p -i -o -t` in a non-hidden `goudacell_cp_*` folder in the
 cwd (CellProfiler's default Images filter skips dot-folders; `-t` keeps its temp files out
 of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` with
-`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. Working
-install (CellProfiler 4.2.8.1, Python 3.9, OpenJDK from conda-forge), in its own env since
-it needs numpy<2:
+`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. CellProfiler
+(4.2.8.1, Python 3.9, OpenJDK from conda-forge) lives in its own env since it needs numpy<2:
+`bash scripts/setup_cellprofiler_env.sh` creates `goudacell_cp` from `envs/cellprofiler.yml`
+(`--solver=libmamba` when available; the classic solver can hang on it). `find_cellprofiler` resolves
+an unset `cellprofiler_cmd`: `GOUDACELL_CELLPROFILER` → `cellprofiler` on PATH → the
+`goudacell_cp` env's `bin/cellprofiler` (conda base from `CONDA_EXE`/`sys.prefix`, then
+`conda env list --json`), never activating anything. An unset `pipeline_file` runs
+`default_pipeline`, which fills `data/goudacell_default.cppipe` for the staged channels and
+masks and drops MeasureTexture / MeasureColocalization / MeasureObjectNeighbors per
+`include_texture` / `include_correlation` / `include_neighbors`. `check_cellprofiler` runs
+`<cmd> --version` (passing commands cached) and raises unless it's CellProfiler 4.2.x, naming
+the command and where it came from; the backend, the notebook's CP command status / config
+generation, and `goudacell segment` (before any segmentation) all go through it.
 
-```bash
-conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
-```
+## Environment check
+
+`environment.check_environment()` runs at the top of `goudacell/__init__.py`, before the heavy
+imports (stdlib only, Python-3.9-safe), and raises if the interpreter is the `goudacell_cp`
+CellProfiler env, Python < 3.10, or numpy < 2; `ParameterUI` also requires Cellpose. The
+notebook's first cell turns a missing `goudacell` (the CellProfiler kernel can't import it)
+into the same "switch the kernel to goudacell" error.
 
 ## Running Tests
 
-Tests are local-only except the brieflow parity test (see above) and
-`tests/test_cellprofiler_backend.py` (skips without CellProfiler).
+Tests are local-only except the brieflow parity test (see above),
+`tests/test_cellprofiler_backend.py` (its CellProfiler runs skip when none is found) and
+`tests/test_environment.py`.
 
 ```bash
 BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v
-GOUDACELL_CELLPROFILER=/path/to/envs/cellprofiler/bin/cellprofiler \
-    pytest tests/test_cellprofiler_backend.py -v
+pytest tests/test_cellprofiler_backend.py -v   # finds the goudacell_cp env by itself
 ```

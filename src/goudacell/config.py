@@ -15,7 +15,8 @@ class FeatureExtractionParams:
         enabled: Whether to run feature extraction.
         method: Extraction backend. One of "cp_emulator" (built-in, default),
             "cp_measure" (requires cp-measure package), or "cellprofiler"
-            (a CellProfiler install, run headless, and ``pipeline_file``).
+            (a CellProfiler install run headless on ``pipeline_file``, goudacell's
+            default pipeline when unset).
         channel_names: Names for each channel (auto-detected if None).
         channels: Channel indices to extract from (None = all channels). Use to
             restrict extraction to specific channels (e.g. [2] for one stain).
@@ -47,9 +48,9 @@ class FeatureExtractionParams:
     output_path: str = "features.csv"
     combine_tables: bool = False
     combined_output: str = "features_combined.csv"
-    # CellProfiler headless options (only used when method="cellprofiler")
+    # CellProfiler headless options (method="cellprofiler"); None = default pipeline / found CP
     pipeline_file: Optional[str] = None
-    cellprofiler_cmd: str = "cellprofiler"
+    cellprofiler_cmd: Optional[str] = None
     foci_channel: Optional[Union[int, List[int]]] = None
     custom_features: Optional[List[dict]] = None
 

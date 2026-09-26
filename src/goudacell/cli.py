@@ -67,6 +67,19 @@ def segment(
     # Load config
     cfg = SegmentationConfig.from_yaml(config)
 
+    # A CellProfiler that can't run fails now, not after every image is segmented
+    fe = cfg.feature_extraction
+    if fe is not None and fe.enabled and fe.method == "cellprofiler":
+        from rich.markup import escape
+
+        from goudacell.features_cellprofiler import check_cellprofiler
+
+        try:
+            check_cellprofiler(fe.cellprofiler_cmd)
+        except RuntimeError as err:
+            console.print(f"[red]Error: {escape(str(err))}[/red]", highlight=False)
+            raise typer.Exit(1)
+
     # Get input files
     input_files = cfg.get_input_files()
 

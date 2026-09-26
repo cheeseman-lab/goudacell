@@ -2,6 +2,11 @@
 
 __version__ = "0.4.0"
 
+from goudacell.environment import check_environment
+
+# Before the heavy imports, so a wrong env fails with a clear message, not deep in numpy
+check_environment()
+
 from goudacell.features import extract_features
 from goudacell.gpu import GPUStatus, detect_gpu, resolve_gpu
 from goudacell.io import load_image, save_image, save_mask
@@ -48,4 +53,5 @@ __all__ = [
     "detect_gpu",
     "resolve_gpu",
     "GPUStatus",
+    "check_environment",
 ]

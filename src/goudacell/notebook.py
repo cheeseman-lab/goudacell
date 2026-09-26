@@ -24,7 +24,6 @@ Custom per-cell features (brieflow ``CUSTOM_FEATURES``) are registered in code w
 ``ui.set_custom_features([my_feature, (other_feature, "cell")])``.
 """
 
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,6 +35,8 @@ from goudacell.config import (
     SecondaryObjectParams,
     SegmentationConfig,
 )
+from goudacell.environment import check_environment
+from goudacell.features_cellprofiler import DEFAULT_PIPELINE, check_cellprofiler, find_cellprofiler
 
 COMPARTMENTS = ["nucleus", "cell", "cytoplasm"]
 METHODS = ["cp_emulator", "cp_measure", "cellprofiler"]
@@ -165,10 +166,12 @@ def _cellprofiler_problem(fe: Optional[FeatureExtractionParams]) -> Optional[str
     """Why a config's CellProfiler backend can't run here, or None."""
     if fe is None or not fe.enabled or fe.method != "cellprofiler":
         return None
-    if not fe.pipeline_file or not Path(fe.pipeline_file).is_file():
+    if fe.pipeline_file and not Path(fe.pipeline_file).is_file():
         return f"CellProfiler pipeline not found: {fe.pipeline_file!r}"
-    if shutil.which(fe.cellprofiler_cmd) is None:
-        return f"CellProfiler command not found: {fe.cellprofiler_cmd!r}"
+    try:
+        check_cellprofiler(fe.cellprofiler_cmd)
+    except RuntimeError as err:
+        return str(err)
     return None
 
 
@@ -211,7 +214,12 @@ class ParameterUI:
             config_dir: Where the generated config YAML is saved.
             nuclei_model: Override the nuclei-only model (default: auto by version).
             cell_model: Override the cell model (default: auto by version).
+
+        Raises:
+            RuntimeError: If the kernel is not a working goudacell env (e.g. the
+                CellProfiler env).
         """
+        check_environment(require_cellpose=True)
         self.input_dir = input_dir
         self.file_pattern = file_pattern
         self.output_dir = output_dir
@@ -450,16 +458,24 @@ class ParameterUI:
         self.feat_method_note = widgets.HTML(
             "<i><code>cp_measure</code> is listed once installed "
             "(<code>uv pip install -e '.[cp_measure]'</code>); "
-            "<code>cellprofiler</code> needs a CellProfiler env (its <code>bin/cellprofiler</code> "
-            "as the command) + a .cppipe pipeline (see the README).</i>"
+            "<code>cellprofiler</code> needs the <code>goudacell_cp</code> env "
+            "(<code>scripts/setup_cellprofiler_env.sh</code>), found by itself; leave the "
+            "pipeline blank for goudacell's default or give your own .cppipe (see the README).</i>"
         )
         self.feat_cp_pipeline = widgets.Text(
-            value="", placeholder="path/to/pipeline.cppipe", description="CP pipeline:"
+            value="", placeholder=f"default: {DEFAULT_PIPELINE.name}", description="CP pipeline:"
         )
+        # Checked on Enter/blur, not per keystroke: each check runs `<cmd> --version`
         self.feat_cp_cmd = widgets.Text(
-            value=shutil.which("cellprofiler") or "cellprofiler", description="CP command:"
+            value=find_cellprofiler() or "",
+            placeholder="not found: see the README",
+            description="CP command:",
+            continuous_update=False,
         )
-        self.feat_cp_box = widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd])
+        self.feat_cp_status = widgets.HTML("")
+        self.feat_cp_box = widgets.VBox(
+            [widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd]), self.feat_cp_status]
+        )
         self.feat_channels = widgets.Text(
             value="", placeholder="all (e.g. 0,2)", description="Channels:"
         )
@@ -728,6 +744,8 @@ class ParameterUI:
         self.so_enabled.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.feat_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.feat_method.observe(lambda _c: self._check_cellprofiler(), names="value")
+        self.feat_cp_cmd.observe(lambda _c: self._check_cellprofiler(), names="value")
         self.so_run_btn.on_click(self._on_second_objs)
         self.config_btn.on_click(self._on_generate)
 
@@ -760,6 +778,23 @@ class ParameterUI:
         self.image_w.options = options
         if options:
             self.image_w.value = options[0][1]
+
+    def _check_cellprofiler(self) -> None:
+        """Show whether the CellProfiler command runs, once the backend is selected."""
+        import html
+
+        if self.feat_method.value != "cellprofiler":
+            self.feat_cp_status.value = ""
+            return
+        self.feat_cp_status.value = "<i>Checking CellProfiler (<code>--version</code>)…</i>"
+        try:
+            cmd = check_cellprofiler(self.feat_cp_cmd.value.strip() or None)
+        except RuntimeError as err:
+            error = html.escape(str(err))
+            self.feat_cp_status.value = f"<b style='color:#b31d28'>Error: {error}</b>"
+            return
+        ok = html.escape(cmd)
+        self.feat_cp_status.value = f"<i style='color:#1a7f37'>CellProfiler OK: {ok}</i>"
 
     def _gpu_banner_html(self) -> str:
         """Render the GPU status banner HTML."""
@@ -857,7 +892,7 @@ class ParameterUI:
             foci_channel=_parse_foci(self.feat_foci.value),
             custom_features=list(self.custom_feature_definitions) or None,
             pipeline_file=str(Path(pipeline).resolve()) if pipeline else None,
-            cellprofiler_cmd=self.feat_cp_cmd.value.strip() or "cellprofiler",
+            cellprofiler_cmd=self.feat_cp_cmd.value.strip() or None,
         )
 
     def build_second_obj_params(self) -> SecondaryObjectParams:
@@ -1469,7 +1504,7 @@ class ParameterUI:
             if fe.combine_tables:
                 detail += ", combined table"
             if fe.method == "cellprofiler":
-                detail += f", pipeline {fe.pipeline_file}"
+                detail += f", pipeline {fe.pipeline_file or DEFAULT_PIPELINE.name + ' (default)'}"
             lines.append(detail)
         else:
             lines.append("Features: off")

@@ -1,6 +1,6 @@
 """GoudaCell: HPC-compatible cell segmentation using Cellpose."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from goudacell.environment import check_environment
 

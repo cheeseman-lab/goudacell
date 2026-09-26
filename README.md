@@ -26,6 +26,8 @@ GoudaCell is a **single-shot tool** — run it once on your images to produce se
 - Classification — train models to distinguish cell states or drug responses
 - Correlation analysis — link morphological features to genetic perturbations
 
+**Upgrading from 0.3?** 0.4.0 runs brieflow's phenotype code, so masks and feature tables change for existing configs. See [CHANGELOG.md](CHANGELOG.md#upgrading-from-03).
+
 ## Getting Started
 
 ### 1. Set Up Your Environment (one time)
@@ -73,6 +75,10 @@ Open the notebook at `notebooks/segmentation.ipynb` and:
 # Use the config the notebook wrote to configs/ (run from the repo root)
 sbatch scripts/run_segmentation.sh configs/segmentation_config.yaml
 ```
+
+`goudacell segment` keeps going when one file fails and ends with a summary of the failed
+files. It exits 1 only when no file succeeded; when some files fail it keeps the outputs of the
+others and exits 0, so check the summary at the end of the log.
 
 ### Project layout
 
@@ -254,3 +260,9 @@ Either version also accepts a path to a custom trained model in place of a model
 - TIFF (`.tif`, `.tiff`)
 - Nikon ND2 (`.nd2`)
 - DeltaVision (`.dv`)
+
+## License
+
+MIT; see [LICENSE](LICENSE). `src/goudacell/brieflow/` is vendored from
+[brieflow](https://github.com/cheeseman-lab/brieflow) (MIT) and keeps brieflow's own
+[LICENSE](src/goudacell/brieflow/LICENSE), which `scripts/sync_brieflow.py` copies with the modules.

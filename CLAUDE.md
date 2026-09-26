@@ -68,7 +68,8 @@ goudacell version                  # Check versions
 ## Brieflow parity
 
 goudacell runs brieflow's phenotype code unchanged. `src/goudacell/brieflow/` holds brieflow's
-`workflow/lib` modules copied verbatim by `scripts/sync_brieflow.py`, whose only change is
+`workflow/lib` modules (and brieflow's MIT `LICENSE`) copied verbatim by
+`scripts/sync_brieflow.py`, whose only change is
 rewriting `lib.` imports to `goudacell.brieflow.`; the pinned commit is `BRIEFLOW_COMMIT` in
 `src/goudacell/brieflow/__init__.py` (**brieflow `zarr3` @ `f03a2c8`**). Never edit the vendored
 files: fix brieflow upstream, then re-sync. goudacell's own code is thin adapters that map its

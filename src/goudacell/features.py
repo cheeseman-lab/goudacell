@@ -1,43 +1,35 @@
-"""Feature extraction for segmented cells.
+"""Feature extraction: thin adapters over brieflow's vendored phenotype code.
 
-This module provides CellProfiler-equivalent feature extraction for GoudaCell.
-Features include intensity statistics, texture (Haralick, PFTAS), shape
-measurements (including Zernike moments), radial distribution, and correlation
-metrics between channels.
+The cp_emulator and cp_measure backends call brieflow's ``extract_phenotype_cp_emulator``
+and ``extract_phenotype_cp_measure`` as brieflow-analysis's phenotype notebook does, with
+cytoplasms from brieflow's ``identify_cytoplasm_cellpose``. goudacell's selection options map
+onto brieflow's: channels onto its per-compartment channel lists, the texture/correlation
+toggles onto its feature tables (the skipped groups are not computed, so float images work
+without them, as before), compartments and neighbors onto its output columns. The CellProfiler
+backend is a goudacell extra.
 """
 
-import warnings
-from itertools import combinations, permutations, product
+import contextlib
 from typing import List, Optional, Union
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
-from goudacell.cp_emulator import (
-    correlation_columns_multichannel,
-    correlation_features_multichannel,
-    find_foci,
-    foci_columns,
-    foci_features,
-    grayscale_columns_multichannel,
-    grayscale_features_multichannel,
-    intensity_columns_multichannel,
-    intensity_distribution_columns_multichannel,
-    intensity_distribution_features_multichannel,
-    intensity_features_multichannel,
-    neighbor_measurements,
-    shape_columns,
-    shape_features,
-)
-from goudacell.feature_table_utils import feature_table, feature_table_multichannel
+from goudacell.brieflow.external.cp_emulator import texture_features_multichannel
+from goudacell.brieflow.phenotype import extract_phenotype_cp_emulator as bf_emulator
+from goudacell.segment import identify_cytoplasm
 
-# Basic features added to all feature extractions
-FEATURES_BASIC = {
-    "area": lambda r: r.area,
-    "i": lambda r: r.centroid[0],
-    "j": lambda r: r.centroid[1],
-    "label": lambda r: r.label,
-}
+COMPARTMENTS = ("nucleus", "cell", "cytoplasm")
+
+# Columns brieflow's neighbor_measurements(distances=[1]) adds per compartment
+NEIGHBOR_COLUMNS = (
+    "number_neighbors_1",
+    "percent_touching_1",
+    "first_neighbor_distance",
+    "second_neighbor_distance",
+    "angle_between_neighbors",
+)
 
 
 def extract_features(
@@ -51,389 +43,260 @@ def extract_features(
     include_correlation: bool = True,
     include_neighbors: bool = True,
     foci_channel: Optional[Union[int, List[int]]] = None,
-    foci_params: Optional[dict] = None,
     method: str = "cp_emulator",
     pipeline_file: Optional[str] = None,
     cellprofiler_cmd: str = "cellprofiler",
+    custom_features: Optional[dict] = None,
 ) -> pd.DataFrame:
-    """Extract CellProfiler-equivalent features from segmented image.
+    """Extract CellProfiler-style features from a segmented image.
 
     Supports three extraction backends:
-    - "cp_emulator" (default): Built-in reimplementation of CellProfiler features.
-    - "cp_measure": Lightweight cp_measure package (requires `.[cp_measure]`).
+    - "cp_emulator" (default): brieflow's ``extract_phenotype_cp_emulator``.
+    - "cp_measure": brieflow's ``extract_phenotype_cp_measure`` (requires `.[cp_measure]`).
     - "cellprofiler": Runs CellProfiler headlessly via CLI subprocess.
       Requires cellprofiler in PATH and a .cppipe pipeline file.
 
+    With the defaults, the cp_emulator table is exactly brieflow's for the same masks.
+
     Args:
-        image: Multichannel image array with shape (C, H, W) where C is the
-            number of channels. For single channel images, pass (1, H, W).
-        nuclei_masks: Labeled segmentation mask for nuclei (H, W). Each unique
-            integer > 0 represents a distinct nucleus.
-        cell_masks: Optional labeled segmentation mask for whole cells (H, W).
-            If provided, cytoplasm features will also be extracted.
-        channel_names: Names for each channel. If None, defaults to
-            ["ch0", "ch1", ...].
-        channels: Channel indices to extract from. If None, all channels are
-            used. When given, the image and channel_names are sliced to these
-            channels before extraction (applies to all backends). Any
-            foci_channel indices then refer to positions within this subset.
-        compartments: Which compartments to measure, any of "nucleus", "cell",
-            "cytoplasm". If None, all available are measured. cp_emulator only.
-        include_texture: Whether to include Haralick and PFTAS texture features.
-            These are computationally expensive but informative.
-        include_correlation: Whether to include channel correlation features
-            (overlap, Manders coefficients, etc.).
-        include_neighbors: Whether to include neighbor measurements (count,
-            distances, angles).
-        foci_channel: Optional channel index or list of indices for foci detection.
-            If provided, foci will be detected in the specified channel(s) and
-            foci count/area features will be extracted per cell for each channel.
-            Only supported with cp_emulator method.
-        foci_params: Optional dict of parameters for foci detection:
-            - radius: Disk radius for white tophat filter (default: 3)
-            - threshold: Threshold for foci detection (default: 10)
-            - remove_border_foci: Remove foci touching border (default: False)
+        image: Multichannel image array with shape (C, H, W); (H, W) for one channel.
+        nuclei_masks: Labeled segmentation mask for nuclei (H, W).
+        cell_masks: Optional labeled cell mask (H, W). With reconciled masks, cytoplasm
+            features are also extracted (brieflow ``identify_cytoplasm_cellpose``).
+        channel_names: Names for each channel, for all channels or for the selected
+            ``channels``. If None, defaults to ["ch0", "ch1", ...].
+        channels: Channel indices to extract from. If None, all channels are used.
+            cp_emulator measures these channels (brieflow's per-compartment channel
+            lists); the other backends get the image sliced to them. Any
+            ``foci_channel`` indices refer to positions within this subset.
+        compartments: Compartments to measure, any of "nucleus", "cell", "cytoplasm".
+            If None, all available are measured.
+        include_texture: Compute the Haralick and PFTAS texture features (cp_emulator;
+            mahotas needs an integer image for them).
+        include_correlation: Compute the between-channel correlation/colocalization
+            features (cp_emulator; mahotas needs an integer image), or for cp_measure
+            keep their columns.
+        include_neighbors: Keep the neighbor measurement columns.
+        foci_channel: Optional channel index or list of indices for brieflow's foci
+            features (cp_emulator only).
         method: Extraction backend. One of "cp_emulator", "cp_measure",
             or "cellprofiler".
         pipeline_file: Path to .cppipe file (cellprofiler method only).
         cellprofiler_cmd: CellProfiler executable (cellprofiler method only).
+        custom_features: Per-compartment custom features as returned by brieflow's
+            ``load_custom_features``, each measured on the full multichannel image
+            (channel order of the input). cp_emulator only.
 
     Returns:
-        DataFrame with one row per cell and columns for each extracted feature.
-        Column prefixes indicate compartment: "nucleus_", "cell_", "cytoplasm_".
-        Feature names follow CellProfiler conventions where possible.
+        DataFrame with one row per object; column prefixes indicate the compartment
+        ("nucleus_", "cell_", "cytoplasm_"), as brieflow's.
     """
-    # Restrict to a subset of channels (applies to all backends)
-    if channels is not None:
-        if image.ndim == 2:
-            image = image[np.newaxis, ...]
-        image = image[channels]
-        if channel_names is not None:
-            # Names may be given for the selected channels (same length) or for
-            # all original channels (then subset by index).
-            if len(channel_names) == len(channels):
-                pass
-            elif len(channel_names) > max(channels):
-                channel_names = [channel_names[i] for i in channels]
-            else:
-                raise ValueError(
-                    f"channel_names has {len(channel_names)} entries; expected "
-                    f"{len(channels)} (one per selected channel) or at least "
-                    f"{max(channels) + 1} (one per original channel)."
-                )
-
-    # Correlation is a between-channel measure — needs at least two channels.
-    n_channels_eff = image.shape[0] if image.ndim == 3 else 1
-    if include_correlation and n_channels_eff < 2:
-        include_correlation = False
-
-    # Dispatch to alternative backends
-    if method == "cp_measure":
-        from goudacell.features_cp_measure import extract_features_cp_measure
-
-        return extract_features_cp_measure(
-            image,
-            nuclei_masks=nuclei_masks,
-            cell_masks=cell_masks,
-            channel_names=channel_names,
-            include_texture=include_texture,
-            include_correlation=include_correlation,
-            include_neighbors=include_neighbors,
+    if method not in ("cp_emulator", "cp_measure", "cellprofiler"):
+        raise ValueError(
+            f"Unknown extraction method '{method}'. "
+            "Supported: 'cp_emulator', 'cp_measure', 'cellprofiler'"
         )
-    elif method == "cellprofiler":
+    if custom_features and method != "cp_emulator":
+        raise ValueError("Custom features require method 'cp_emulator'")
+    if foci_channel is not None and method != "cp_emulator":
+        raise ValueError("Foci features require method 'cp_emulator'")
+
+    if image.ndim == 2:
+        image = image[np.newaxis, ...]
+    if image.ndim != 3:
+        raise ValueError(f"Image must be (C, H, W), got shape {image.shape}")
+    n_channels = image.shape[0]
+    selected = list(range(n_channels)) if channels is None else list(channels)
+    names = _full_channel_names(channel_names, selected, n_channels)
+    selected_names = [names[i] for i in selected]
+    # Between-channel features need two channels (brieflow's would raise on one)
+    include_correlation = include_correlation and len(selected) > 1
+
+    # Masks brieflow gets: an unrequested compartment is not measured (foci use the cells)
+    wanted = set(compartments or COMPARTMENTS) | set(custom_features or {})
+    has_cells = cell_masks is not None and np.sum(cell_masks) > 0
+    cytoplasm_masks = None
+    if has_cells and "cytoplasm" in wanted:
+        cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks)
+    if not ("cell" in wanted or foci_channel is not None):
+        has_cells = False
+
+    if method == "cellprofiler":
         from goudacell.features_cellprofiler import extract_features_cellprofiler
 
-        return extract_features_cellprofiler(
-            image,
+        # Stage every mask the pipeline may load; compartments only drop columns after
+        if cytoplasm_masks is None and cell_masks is not None and np.sum(cell_masks) > 0:
+            cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks)
+        df = extract_features_cellprofiler(
+            image[selected],
             nuclei_masks=nuclei_masks,
             cell_masks=cell_masks,
-            channel_names=channel_names,
+            channel_names=selected_names,
             pipeline_file=pipeline_file,
+            cytoplasm_masks=cytoplasm_masks,
             cellprofiler_cmd=cellprofiler_cmd,
             include_texture=include_texture,
             include_correlation=include_correlation,
             include_neighbors=include_neighbors,
         )
-    elif method != "cp_emulator":
-        raise ValueError(
-            f"Unknown extraction method '{method}'. "
-            "Supported: 'cp_emulator', 'cp_measure', 'cellprofiler'"
+        return _keep_compartments(df, compartments)
+
+    if method == "cp_measure":
+        from goudacell.brieflow.phenotype.extract_phenotype_cp_measure import (
+            extract_phenotype_cp_measure,
         )
-    # Suppress skimage deprecation warnings for RegionProperties attribute renames
-    # (intensity_image -> image_intensity, etc.)
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*RegionProperties\.\w+ is deprecated.*",
-        category=FutureWarning,
+
+        df = extract_phenotype_cp_measure(
+            image[selected],
+            nuclei=nuclei_masks,
+            cells=cell_masks if has_cells else None,
+            cytoplasms=cytoplasm_masks,
+            channel_names=selected_names,
+        )
+    else:
+        if isinstance(foci_channel, list):
+            foci_channel = [selected[fc] for fc in foci_channel]
+        elif foci_channel is not None:
+            foci_channel = selected[foci_channel]
+        with _feature_groups(include_texture, include_correlation):
+            df = bf_emulator.extract_phenotype_cp_emulator(
+                image,
+                nuclei=nuclei_masks,
+                cells=cell_masks if has_cells else None,
+                wildcards={},
+                cytoplasms=cytoplasm_masks,
+                nucleus_channels=selected,
+                cell_channels=selected,
+                cytoplasm_channels=selected,
+                foci_channel=foci_channel,
+                channel_names=names,
+                custom_features=custom_features,
+            )
+
+    drop = [
+        c for c in df.columns
+        if (not include_correlation and "_coloc_" in c)
+        or (not include_neighbors and ("_neighbor_" in c or c.endswith(NEIGHBOR_COLUMNS)))
+    ]
+    return _keep_compartments(df.drop(columns=drop), compartments)
+
+
+def _feature_groups(include_texture: bool, include_correlation: bool):
+    """Scope brieflow's cp_emulator extractor to the chosen feature groups.
+
+    Hands ``extract_phenotype_cp_emulator`` reduced copies of its module-level feature
+    tables for the duration of the call; the brieflow code itself is untouched.
+    """
+    patches = {}
+    if not include_texture:
+        patches["grayscale_features_multichannel"] = {
+            k: v
+            for k, v in bf_emulator.grayscale_features_multichannel.items()
+            if k not in texture_features_multichannel
+        }
+    if not include_correlation:
+        patches["correlation_features_multichannel"] = {}
+    return mock.patch.multiple(bf_emulator, **patches) if patches else contextlib.nullcontext()
+
+
+def _full_channel_names(
+    channel_names: Optional[List[str]], selected: List[int], n_channels: int
+) -> List[str]:
+    """One name per image channel, from names given for all or for the selected channels."""
+    if channel_names is None:
+        return [f"ch{i}" for i in range(n_channels)]
+    channel_names = list(channel_names)
+    if len(channel_names) == n_channels:
+        return channel_names
+    if len(channel_names) == len(selected):
+        names = [f"ch{i}" for i in range(n_channels)]
+        for index, name in zip(selected, channel_names):
+            names[index] = name
+        return names
+    raise ValueError(
+        f"channel_names has {len(channel_names)} entries; expected {len(selected)} (one "
+        f"per selected channel) or {n_channels} (one per image channel)."
     )
 
-    # Validate inputs
-    if image.ndim == 2:
-        image = image[np.newaxis, ...]  # Add channel dimension
 
-    if image.ndim != 3:
-        raise ValueError(f"Image must be (C, H, W), got shape {image.shape}")
-
-    n_channels = image.shape[0]
-
-    # Generate default channel names if not provided
-    if channel_names is None:
-        channel_names = [f"ch{i}" for i in range(n_channels)]
-
-    if len(channel_names) != n_channels:
-        raise ValueError(
-            f"Number of channel names ({len(channel_names)}) must match "
-            f"number of channels ({n_channels})"
-        )
-
-    # Check for empty masks
-    if np.sum(nuclei_masks) == 0:
-        return pd.DataFrame(columns=["label"])
-
-    # Build feature dictionary based on options
-    features = _build_feature_dict(include_texture, include_correlation)
-
-    # Create column mapping for renaming
-    channel_idx = list(range(n_channels))
-
-    # Decide which compartments to measure
-    def want(compartment: str) -> bool:
-        return compartments is None or compartment in compartments
-
-    dfs = []
-
-    # Extract nucleus features
-    if want("nucleus"):
-        nucleus_columns = _make_column_map(
-            channel_idx, channel_names, include_texture, include_correlation
-        )
-        nucleus_df = _extract_compartment_features(
-            image, nuclei_masks, features, nucleus_columns, "nucleus"
-        )
-        dfs.append(nucleus_df)
-
-    # Extract cell features if masks provided
-    if cell_masks is not None and np.sum(cell_masks) > 0:
-        if want("cell"):
-            cell_columns = _make_column_map(
-                channel_idx, channel_names, include_texture, include_correlation
-            )
-            cell_df = _extract_compartment_features(
-                image, cell_masks, features, cell_columns, "cell"
-            )
-            dfs.append(cell_df)
-
-        # Extract cytoplasm features (cell - nucleus)
-        if want("cytoplasm"):
-            cytoplasm_masks = _create_cytoplasm_masks(cell_masks, nuclei_masks)
-            if np.sum(cytoplasm_masks) > 0:
-                cyto_columns = _make_column_map(
-                    channel_idx, channel_names, include_texture, include_correlation
-                )
-                cyto_df = _extract_compartment_features(
-                    image, cytoplasm_masks, features, cyto_columns, "cytoplasm"
-                )
-                dfs.append(cyto_df)
-
-    # Extract neighbor measurements
-    if include_neighbors:
-        if want("nucleus"):
-            dfs.append(
-                neighbor_measurements(nuclei_masks, distances=[1])
-                .set_index("label")
-                .add_prefix("nucleus_")
-            )
-
-        if want("cell") and cell_masks is not None and np.sum(cell_masks) > 0:
-            dfs.append(
-                neighbor_measurements(cell_masks, distances=[1])
-                .set_index("label")
-                .add_prefix("cell_")
-            )
-
-    # Extract foci features if foci channel is provided
-    if foci_channel is not None:
-        # Use cells if available, otherwise fall back to nuclei
-        foci_mask = (
-            cell_masks if (cell_masks is not None and np.sum(cell_masks) > 0) else nuclei_masks
-        )
-
-        # Get foci detection parameters
-        params = foci_params or {}
-        radius = params.get("radius", 3)
-        threshold = params.get("threshold", 10)
-        remove_border = params.get("remove_border_foci", False)
-
-        # Normalize to list for consistent handling
-        if isinstance(foci_channel, int):
-            foci_channels = [foci_channel]
-        else:
-            foci_channels = foci_channel
-
-        # Process each foci channel
-        for fc in foci_channels:
-            # Detect foci in the specified channel
-            foci_image = image[fc]
-            foci_labeled = find_foci(
-                foci_image, radius=radius, threshold=threshold, remove_border_foci=remove_border
-            )
-
-            # Extract foci features using the cell/nuclei masks as regions
-            foci_df = feature_table(foci_labeled, foci_mask, foci_features)
-
-            # Rename columns with channel name prefix
-            ch_name = channel_names[fc] if channel_names else f"ch{fc}"
-            foci_column_map = {feat: f"{ch_name}_{col[0]}" for feat, col in foci_columns.items()}
-            foci_df = foci_df.rename(columns=foci_column_map).set_index("label").add_prefix("cell_")
-            dfs.append(foci_df)
-
-    # Concatenate all features
-    if not dfs:
-        return pd.DataFrame(columns=["label"])
-    result_df = pd.concat(dfs, axis=1, join="outer", sort=False).reset_index()
-
-    # Reorder columns: label first, then nucleus, cell, cytoplasm
-    result_df = _order_columns(result_df)
-
-    return result_df
+def _keep_compartments(df: pd.DataFrame, compartments: Optional[List[str]]) -> pd.DataFrame:
+    """Drop the columns of compartments not in ``compartments`` (None keeps all)."""
+    if compartments is None:
+        return df
+    dropped = tuple(f"{comp}_" for comp in COMPARTMENTS if comp not in compartments)
+    return df[[c for c in df.columns if not c.startswith(dropped)]] if dropped else df
 
 
-def _build_feature_dict(include_texture: bool, include_correlation: bool) -> dict:
-    """Build the feature dictionary based on options."""
-    features = {}
-
-    # Always include intensity and shape features
-    if include_texture:
-        features.update(grayscale_features_multichannel)
-    else:
-        # Just intensity without texture
-        features.update(intensity_features_multichannel)
-        features.update(intensity_distribution_features_multichannel)
-
-    features.update(shape_features)
-
-    if include_correlation:
-        features.update(correlation_features_multichannel)
-
-    return features
+def _second_obj_channel_names(fe, image):
+    """Channel names for every channel of ``image`` (secondary objects use them all)."""
+    n_channels = image.shape[0] if image.ndim == 3 else 1
+    if fe.channel_names is not None and len(fe.channel_names) == n_channels:
+        return list(fe.channel_names)
+    return [f"ch{i}" for i in range(n_channels)]
 
 
-def _make_column_map(
-    channels: List[int],
-    channel_names: List[str],
-    include_texture: bool,
-    include_correlation: bool,
-) -> dict:
-    """Create column name mapping for features."""
-    columns = {}
-
-    # Build column map for grayscale features
-    if include_texture:
-        col_dict = grayscale_columns_multichannel
-    else:
-        col_dict = {
-            **intensity_columns_multichannel,
-            **intensity_distribution_columns_multichannel,
-        }
-
-    for feat, out in col_dict.items():
-        columns.update(
-            {
-                f"{feat}_{n}": f"{channel_names[ch]}_{renamed}"
-                for n, (renamed, ch) in enumerate(product(out, channels))
-            }
-        )
-
-    # Build column map for correlation features
-    if include_correlation:
-        for feat, out in correlation_columns_multichannel.items():
-            if feat == "lstsq_slope":
-                iterator = permutations
-            else:
-                iterator = combinations
-            columns.update(
-                {
-                    f"{feat}_{n}": renamed.format(
-                        first=channel_names[first], second=channel_names[second]
-                    )
-                    for n, (renamed, (first, second)) in enumerate(
-                        product(out, iterator(channels, 2))
-                    )
-                }
-            )
-
-    # Add shape columns
-    columns.update(shape_columns)
-
-    return columns
+def _second_obj_foci_channel(fe):
+    """Map the feature foci channel to a full-image index for secondary objects."""
+    fc = fe.foci_channel
+    if isinstance(fc, list):
+        if len(fc) != 1:
+            raise ValueError("Secondary-object foci take a single foci channel (as brieflow)")
+        fc = fc[0]
+    if fc is not None and fe.channels:
+        fc = fe.channels[fc]
+    return fc
 
 
-def _extract_compartment_features(
-    image: np.ndarray,
-    masks: np.ndarray,
-    features: dict,
-    column_map: dict,
-    prefix: str,
-) -> pd.DataFrame:
-    """Extract features for a single compartment (nucleus, cell, or cytoplasm)."""
-    # Add basic features
-    all_features = features.copy()
-    all_features.update(FEATURES_BASIC)
+def extract_second_obj_features(fe, image, second_obj_masks, second_obj_table):
+    """Per-object secondary-object features from brieflow's ``extract_phenotype_second_objs``."""
+    from goudacell.brieflow.phenotype.extract_phenotype_second_objs import (
+        extract_phenotype_second_objs,
+    )
 
-    # Extract features
-    df = feature_table_multichannel(image, masks, all_features)
+    return extract_phenotype_second_objs(
+        image,
+        second_objs=second_obj_masks,
+        wildcards={},
+        second_obj_cell_mapping_df=second_obj_table["second_obj_cell_mapping"],
+        foci_channel=_second_obj_foci_channel(fe),
+        channel_names=_second_obj_channel_names(fe, image),
+    )
 
-    # Rename columns and add prefix
-    df = df.rename(columns=column_map).set_index("label").add_prefix(f"{prefix}_")
 
+def add_num_nuclei(df: pd.DataFrame, nuclei_per_cell: dict) -> pd.DataFrame:
+    """Attach the per-cell nuclei count, defaulting to 1 where a cell has no entry.
+
+    Mirrors brieflow's ``scripts/phenotype/extract_phenotype.py`` (``num_nuclei`` column).
+
+    Args:
+        df: Feature table with a ``label`` column.
+        nuclei_per_cell: ``{cell_label: n_nuclei}`` from segmentation (may be empty).
+
+    Returns:
+        The table with a ``num_nuclei`` column.
+    """
+    labels = df["label"] if "label" in df else pd.Series(dtype=int)
+    df["num_nuclei"] = labels.map(pd.Series(nuclei_per_cell, dtype=float)).fillna(1).astype(int)
     return df
 
 
-def _create_cytoplasm_masks(cell_masks: np.ndarray, nuclei_masks: np.ndarray) -> np.ndarray:
-    """Create cytoplasm masks by subtracting nuclei from cells.
+def merge_second_obj_summary(df: pd.DataFrame, cell_summary: pd.DataFrame) -> pd.DataFrame:
+    """Merge the secondary-object cell summary into the per-cell feature table.
+
+    Mirrors brieflow's ``scripts/phenotype/merge_second_objs_phenotype_cp.py``: a left
+    merge on ``label`` = ``cell_id``, dropping ``cell_id``.
 
     Args:
-        cell_masks: Labeled cell segmentation mask.
-        nuclei_masks: Labeled nuclei segmentation mask.
+        df: Per-cell feature table with a ``label`` column.
+        cell_summary: The ``cell_summary`` table from secondary-object segmentation.
 
     Returns:
-        Labeled cytoplasm masks where each cell's cytoplasm has the same
-        label as the parent cell.
+        The merged table.
     """
-    cytoplasm = cell_masks.copy()
-    cytoplasm[nuclei_masks > 0] = 0
-    return cytoplasm
-
-
-def _order_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Order DataFrame columns: label, nucleus features, cell features, cytoplasm features."""
-    ordered_cols = []
-
-    # Label first
-    if "label" in df.columns:
-        ordered_cols.append("label")
-
-    # Get remaining columns
-    remaining = [col for col in df.columns if col not in ordered_cols]
-
-    # Group by compartment
-    nucleus_cols = sorted([col for col in remaining if col.startswith("nucleus_")])
-    cell_cols = sorted([col for col in remaining if col.startswith("cell_")])
-    cytoplasm_cols = sorted([col for col in remaining if col.startswith("cytoplasm_")])
-    other_cols = sorted(
-        [
-            col
-            for col in remaining
-            if not any(col.startswith(p) for p in ["nucleus_", "cell_", "cytoplasm_"])
-        ]
-    )
-
-    ordered_cols.extend(other_cols)
-    ordered_cols.extend(nucleus_cols)
-    ordered_cols.extend(cell_cols)
-    ordered_cols.extend(cytoplasm_cols)
-
-    return df[ordered_cols]
+    if len(df) == 0 or len(cell_summary) == 0:
+        return df
+    merged = df.merge(cell_summary, left_on="label", right_on="cell_id", how="left")
+    return merged.drop("cell_id", axis=1)
 
 
 def get_feature_categories() -> dict:

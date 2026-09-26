@@ -5,7 +5,9 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 ## Features
 
 - **Segmentation modes**: nuclei-only, cells-only, or dual (both)
-- **Feature extraction**: CellProfiler-equivalent morphological and intensity features
+- **Secondary objects**: detect objects inside cells (pathogens, organelles) by thresholding or Cellpose
+- **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
+- **Brieflow inside**: runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype code (vendored unchanged), so masks and features match brieflow's for the same parameters
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
 - **Cellpose 3 & 4**: Supports both versions with automatic model selection
 
@@ -23,6 +25,8 @@ GoudaCell is a **single-shot tool** — run it once on your images to produce se
 - Dimensionality reduction — PCA/UMAP on feature space for phenotype discovery
 - Classification — train models to distinguish cell states or drug responses
 - Correlation analysis — link morphological features to genetic perturbations
+
+**Upgrading from 0.3?** 0.4.0 runs brieflow's phenotype code, so masks and feature tables change for existing configs. See [CHANGELOG.md](CHANGELOG.md#upgrading-from-03).
 
 ## Getting Started
 
@@ -72,6 +76,10 @@ Open the notebook at `notebooks/segmentation.ipynb` and:
 sbatch scripts/run_segmentation.sh configs/segmentation_config.yaml
 ```
 
+`goudacell segment` keeps going when one file fails and ends with a summary of the failed
+files. It exits 1 only when no file succeeded; when some files fail it keeps the outputs of the
+others and exits 0, so check the summary at the end of the log.
+
 ### Project layout
 
 Generated artifacts are kept out of the source tree:
@@ -105,7 +113,38 @@ Extract CellProfiler-equivalent features from segmented images (~100+ features p
 - **Distribution**: radial intensity distribution
 - **Correlation**: channel correlation, colocalization metrics
 - **Neighbors**: counts, distances, angles
-- **Foci**: count and area per channel (optional)
+- **Foci**: count and area per channel (optional, `feature_extraction.foci_channel`)
+- **Custom**: your own per-cell measurements (`ui.set_custom_features([...])` in the notebook)
+
+With secondary-object detection on (dual mode), each image also gets a
+`*_second_obj_mask.tif`, a per-object `*_second_obj_features.csv`, and per-cell object
+counts/areas merged into the main feature table.
+
+### CellProfiler backend (headless)
+
+`feature_extraction.method: cellprofiler` runs your own CellProfiler pipeline headless on
+each image's masks instead of the built-in extractor. CellProfiler lives in its own env
+(it needs Python 3.9 and Java); goudacell calls its executable as a subprocess:
+
+```bash
+conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
+# then in the config (or the notebook's "CP command" / "CP pipeline" fields):
+#   cellprofiler_cmd: /path/to/miniconda3/envs/cellprofiler/bin/cellprofiler
+#   pipeline_file: /path/to/measure.cppipe
+```
+
+For each image goudacell writes one input folder with every channel as `<channel name>.tif`
+(the `channel_names`) and the masks as `nuclei_mask.tif`, `cell_mask.tif` and
+`cytoplasm_mask.tif`, then runs `cellprofiler -c -r -p <pipeline> -i <input> -o <output>`.
+Build the pipeline in the CellProfiler GUI on such a folder: in NamesAndTypes assign each
+channel file as a grayscale image and the masks as **Objects** named `Nuclei`, `Cells` and
+`Cytoplasm`; add the Measure modules you want; end with ExportToSpreadsheet (CSV, one file
+per object). goudacell joins those three object tables on the mask `label`, with columns
+`nucleus_`/`cell_`/`cytoplasm_` + CellProfiler's names (e.g. `cell_Intensity_MeanIntensity_GFP`,
+intensities scaled to 0–1). A pipeline that loads a mask the mode doesn't produce (e.g.
+`Cells` in nuclei mode) finds no image set and fails with the list of staged files.
+`tests/test_cellprofiler_backend.py` holds a minimal working pipeline; run it with
+`GOUDACELL_CELLPROFILER=<env>/bin/cellprofiler pytest tests/test_cellprofiler_backend.py`.
 
 ## Which Cellpose Version?
 
@@ -114,8 +153,16 @@ Extract CellProfiler-equivalent features from segmented images (~100+ features p
 | Cellpose 3 | `.[cellpose3]` | Round cells (most common) |
 | Cellpose 4 | `.[cellpose4]` | Irregular/complex shapes |
 
+Either version also accepts a path to a custom trained model in place of a model name.
+
 ## File Formats Supported
 
 - TIFF (`.tif`, `.tiff`)
 - Nikon ND2 (`.nd2`)
 - DeltaVision (`.dv`)
+
+## License
+
+MIT; see [LICENSE](LICENSE). `src/goudacell/brieflow/` is vendored from
+[brieflow](https://github.com/cheeseman-lab/brieflow) (MIT) and keeps brieflow's own
+[LICENSE](src/goudacell/brieflow/LICENSE), which `scripts/sync_brieflow.py` copies with the modules.

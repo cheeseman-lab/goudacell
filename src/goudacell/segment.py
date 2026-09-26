@@ -1,27 +1,36 @@
-"""Cellpose-based cell segmentation module.
+"""Cellpose segmentation: thin adapters over brieflow's vendored phenotype code.
 
-This module provides GPU-compatible cell segmentation using Cellpose.
-Supports both Cellpose 3.x and 4.x with automatic version detection.
+Dual (nuclei + cells) and nuclei-only segmentation call brieflow's ``segment_cellpose``
+(``goudacell.brieflow.shared.segment_cellpose``) exactly as brieflow-analysis's phenotype
+notebook does; diameters come from brieflow's ``estimate_diameters``; reconciliation and
+cytoplasm identification are brieflow's. Cells-only segmentation, sweeps and the
+reproducibility helpers are goudacell extras. Supports Cellpose 3.x and 4.x.
 
 Cellpose 3.x (3.1.0):
     - Models: cyto3, nuclei, cyto2, cyto
-    - Good for rounded cells
     - Supports automatic diameter estimation
 
 Cellpose 4.x (4.0.4+):
     - Models: cpsam (Cellpose-SAM)
-    - Better for complex cell shapes
-    - Requires explicit diameter specification
-    - Requires GPU
+    - Diameters are measured from a diameter-free run instead of estimated
+
+Either version accepts a path to a custom trained model in place of a model name.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
 from skimage.measure import regionprops
-from skimage.segmentation import clear_border
-from skimage.util import img_as_ubyte
+
+from goudacell.brieflow.phenotype.identify_cytoplasm_cellpose import (
+    identify_cytoplasm_cellpose,
+)
+from goudacell.brieflow.shared.segmentation_utils import (  # noqa: F401
+    count_nuclei_per_cell,
+    reconcile_nuclei_cells,
+)
 
 
 def get_cellpose_version() -> Tuple[int, int]:
@@ -49,28 +58,35 @@ def get_cellpose_version() -> Tuple[int, int]:
 
 def _is_cellpose_4x() -> bool:
     """Check if Cellpose 4.x is installed."""
-    version = get_cellpose_version()
-    return version[0] >= 4
+    return get_cellpose_version()[0] >= 4
 
 
-def _validate_model(model: str) -> None:
-    """Validate model compatibility with installed Cellpose version."""
-    is_4x = _is_cellpose_4x()
-    version = get_cellpose_version()
+def _is_custom_model(model: Optional[str]) -> bool:
+    """Whether ``model`` is a path to a custom trained model rather than a built-in name."""
+    return model is not None and ("/" in model or "\\" in model)
 
-    if is_4x and model != "cpsam":
-        raise ValueError(
-            f"Model '{model}' requires Cellpose 3.x. "
-            f"Cellpose 4.x only supports the 'cpsam' model. "
-            f"Either use model='cpsam', or install Cellpose 3.x: "
-            f"uv pip install cellpose==3.1.0"
-        )
-    if not is_4x and model == "cpsam":
-        raise ValueError(
-            f"CPSAM model requires Cellpose 4.x. "
-            f"You have Cellpose {version[0]}.{version[1]}. "
-            f"Upgrade with: uv pip install cellpose==4.0.4 torch==2.7.0 torchvision==0.22.0"
-        )
+
+def brieflow_nuclei_model() -> str:
+    """The model brieflow segments nuclei with next to cells: nuclei (3.x) or cpsam (4.x)."""
+    return "cpsam" if _is_cellpose_4x() else "nuclei"
+
+
+def create_cellpose_model(model: str, gpu: bool = False):
+    """Create a CellposeModel via brieflow's version-aware ``create_cellpose_model``.
+
+    Args:
+        model: Built-in model name (e.g. "cyto3", "nuclei", "cpsam") or a custom model path.
+        gpu: Whether to use the GPU.
+
+    Returns:
+        An initialized ``cellpose.models.CellposeModel``.
+
+    Raises:
+        ValueError: If the model is incompatible with the installed Cellpose version.
+    """
+    from goudacell.brieflow.shared import segment_cellpose as bf
+
+    return bf.create_cellpose_model(model, gpu=gpu)
 
 
 def segment(
@@ -83,7 +99,9 @@ def segment(
     gpu: bool = True,
     remove_edge_cells: bool = True,
 ) -> np.ndarray:
-    """Segment cells using Cellpose.
+    """Segment cells in one image with Cellpose (goudacell's cells-only mode).
+
+    brieflow has no cells-only mode; this runs one Cellpose model on the image as given.
 
     Args:
         image: Input image array. Can be:
@@ -93,6 +111,7 @@ def segment(
         model: Cellpose model to use:
             - Cellpose 3.x: 'cyto3' (default), 'nuclei', 'cyto2', 'cyto'
             - Cellpose 4.x: 'cpsam' only
+            - Either version: a path to a custom trained model
         channels: Channel specification for Cellpose [cytoplasm, nucleus].
             For grayscale: [0, 0]
             For RGB with cytoplasm in green, nuclei in blue: [2, 3]
@@ -109,9 +128,7 @@ def segment(
         ImportError: If Cellpose is not installed.
         ValueError: If model is incompatible with Cellpose version.
     """
-    _validate_model(model)
-
-    from cellpose.models import CellposeModel
+    from skimage.segmentation import clear_border
 
     # Determine channels if not specified
     if channels is None:
@@ -123,11 +140,7 @@ def segment(
         else:
             channels = [0, 0]
 
-    # Create model based on Cellpose version
-    if _is_cellpose_4x():
-        cellpose_model = CellposeModel(pretrained_model=model, gpu=gpu)
-    else:
-        cellpose_model = CellposeModel(model_type=model, gpu=gpu)
+    cellpose_model = create_cellpose_model(model, gpu=gpu)
 
     # Run segmentation
     masks, flows, styles = cellpose_model.eval(
@@ -149,10 +162,10 @@ def segment_nuclei_and_cells(
     image: np.ndarray,
     nuclei_channel: int,
     cyto_channel: int,
-    nuclei_diameter: float,
-    cell_diameter: float,
+    nuclei_diameter: Optional[float],
+    cell_diameter: Optional[float],
     cell_model: str = "cyto3",
-    nuclei_model: str = "nuclei",
+    nuclei_model: Optional[str] = None,
     nuclei_flow_threshold: float = 0.4,
     nuclei_cellprob_threshold: float = 0.0,
     cell_flow_threshold: float = 0.4,
@@ -160,242 +173,199 @@ def segment_nuclei_and_cells(
     gpu: bool = True,
     remove_edge_cells: bool = True,
     reconcile: Optional[str] = "consensus",
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Segment both nuclei and cells from a multi-channel image.
+    helper_channel: Optional[int] = None,
+    return_nuclei_per_cell: bool = False,
+) -> tuple:
+    """Segment nuclei and cells with brieflow's ``segment_cellpose``.
+
+    The phenotype notebook's segmentation cell: the channels are merged into a
+    (helper, cyto, DAPI) RGB image, nuclei are segmented on the DAPI plane with brieflow's
+    nuclei model and cells on the RGB image with ``cell_model``, edge objects are
+    cleared, then the masks are reconciled.
 
     Args:
         image: Input image array with shape (C, Y, X).
-        nuclei_channel: Index of the nuclear channel (e.g., DAPI).
-        cyto_channel: Index of the cytoplasmic channel.
-        nuclei_diameter: Estimated nuclear diameter in pixels.
-        cell_diameter: Estimated cell diameter in pixels.
-        cell_model: Cellpose model for cell segmentation (e.g., "cyto3", "cpsam").
-        nuclei_model: Cellpose model for nuclei segmentation (e.g., "nuclei", "cpsam").
+        nuclei_channel: Index of the nuclear channel (brieflow ``DAPI_INDEX``).
+        cyto_channel: Index of the cytoplasmic channel (brieflow ``CYTO_INDEX``).
+        nuclei_diameter: Nuclear diameter in pixels (None lets Cellpose pick).
+        cell_diameter: Cell diameter in pixels (None lets Cellpose pick).
+        cell_model: Cellpose model for cells ("cyto3", "cpsam", or a custom model path).
+        nuclei_model: Accepted for backward compatibility; brieflow always segments nuclei
+            with :func:`brieflow_nuclei_model`, so any other value is ignored with a warning.
         nuclei_flow_threshold: Flow threshold for nuclei segmentation.
         nuclei_cellprob_threshold: Cell prob threshold for nuclei segmentation.
         cell_flow_threshold: Flow threshold for cell segmentation.
         cell_cellprob_threshold: Cell prob threshold for cell segmentation.
         gpu: Whether to use GPU.
-        remove_edge_cells: Remove cells touching image border.
-        reconcile: Reconciliation method matching nuclei to cells and dropping
-            nucleus-less cells ("consensus" or "contained_in_cells"). Pass None
-            to skip and return the raw, independently-labelled masks.
+        remove_edge_cells: Remove objects touching the image border (brieflow always does).
+        reconcile: Reconciliation method ("consensus" or "contained_in_cells"); None skips
+            it and returns the raw, independently labelled masks.
+        helper_channel: Optional channel for the red plane of the Cellpose input
+            (brieflow ``HELPER_INDEX``); None leaves it blank.
+        return_nuclei_per_cell: Also return ``{cell_label: n_nuclei}``.
 
     Returns:
-        Tuple of (nuclei_mask, cell_mask). When ``reconcile`` is set, the two
-        masks share labels (a cell and its nucleus have the same integer).
+        Tuple of (nuclei_mask, cell_mask), plus the nuclei-per-cell dict when
+        ``return_nuclei_per_cell`` is set.
     """
-    _validate_model(cell_model)
-    _validate_model(nuclei_model)
+    from goudacell.brieflow.shared import segment_cellpose as bf
 
-    from cellpose.models import CellposeModel
+    if nuclei_model is not None and nuclei_model != brieflow_nuclei_model():
+        warnings.warn(
+            f"nuclei_model={nuclei_model!r} is ignored: brieflow segments nuclei with "
+            f"{brieflow_nuclei_model()!r} next to cells",
+            stacklevel=2,
+        )
 
-    # Prepare RGB image for cellpose
-    rgb = _prepare_rgb(image, nuclei_channel, cyto_channel)
-
-    # Create models
-    if _is_cellpose_4x():
-        nuclei_cp_model = CellposeModel(pretrained_model=nuclei_model, gpu=gpu)
-        cell_cp_model = CellposeModel(pretrained_model=cell_model, gpu=gpu)
-    else:
-        nuclei_cp_model = CellposeModel(model_type=nuclei_model, gpu=gpu)
-        cell_cp_model = CellposeModel(model_type=cell_model, gpu=gpu)
-
-    # Segment nuclei (using blue channel = DAPI)
-    nuclei_masks, _, _ = nuclei_cp_model.eval(
-        rgb[2],  # Blue channel (DAPI)
-        diameter=nuclei_diameter,
-        flow_threshold=nuclei_flow_threshold,
-        cellprob_threshold=nuclei_cellprob_threshold,
+    thresholds = dict(
+        nuclei_flow_threshold=nuclei_flow_threshold,
+        nuclei_cellprob_threshold=nuclei_cellprob_threshold,
+        cell_flow_threshold=cell_flow_threshold,
+        cell_cellprob_threshold=cell_cellprob_threshold,
     )
-
-    # Segment cells
-    if _is_cellpose_4x():
-        # Cellpose 4.x auto-detects channels from image shape (no channels param)
-        cell_masks, _, _ = cell_cp_model.eval(
-            rgb,
-            diameter=cell_diameter,
-            flow_threshold=cell_flow_threshold,
-            cellprob_threshold=cell_cellprob_threshold,
+    if remove_edge_cells:
+        nuclei, cells, _, nuclei_per_cell = bf.segment_cellpose(
+            image,
+            dapi_index=nuclei_channel,
+            cyto_index=cyto_channel,
+            nuclei_diameter=nuclei_diameter,
+            cell_diameter=cell_diameter,
+            cellpose_kwargs=thresholds,
+            cellpose_model=cell_model,
+            helper_index=helper_channel,
+            gpu=gpu,
+            reconcile=reconcile,
+            cells=True,
+            return_counts=True,
         )
     else:
-        # Cellpose 3.x: use [cytoplasm, nuclei] channel spec
-        cell_masks, _, _ = cell_cp_model.eval(
+        # segment_cellpose always clears edges; this is its body with remove_edges=False
+        rgb = bf.prepare_cellpose(image, nuclei_channel, cyto_channel, helper_index=helper_channel)
+        nuclei, cells, _, nuclei_per_cell = bf.segment_cellpose_rgb(
             rgb,
-            diameter=cell_diameter,
-            channels=[2, 3],  # Green=cyto, Blue=nuclei
-            flow_threshold=cell_flow_threshold,
-            cellprob_threshold=cell_cellprob_threshold,
+            nuclei_diameter,
+            cell_diameter,
+            cellpose_model=cell_model,
+            reconcile=reconcile,
+            remove_edges=False,
+            return_counts=True,
+            gpu=gpu,
+            nuclei_kwargs=dict(
+                flow_threshold=nuclei_flow_threshold, cellprob_threshold=nuclei_cellprob_threshold
+            ),
+            cell_kwargs=dict(
+                flow_threshold=cell_flow_threshold, cellprob_threshold=cell_cellprob_threshold
+            ),
         )
 
-    # Remove edge cells
-    if remove_edge_cells:
-        nuclei_masks = clear_border(nuclei_masks)
-        cell_masks = clear_border(cell_masks)
-
-    # Match nuclei to cells and drop nucleus-less cells (shared labels out).
-    if reconcile:
-        nuclei_masks, cell_masks = reconcile_nuclei_cells(
-            nuclei_masks, cell_masks, how=reconcile
-        )
-
-    return nuclei_masks, cell_masks
+    if return_nuclei_per_cell:
+        return nuclei, cells, nuclei_per_cell
+    return nuclei, cells
 
 
-def _prepare_rgb(
+def segment_nuclei(
     image: np.ndarray,
     nuclei_channel: int,
-    cyto_channel: int,
-    logscale: bool = True,
+    nuclei_diameter: Optional[float],
+    model: Optional[str] = None,
+    flow_threshold: float = 0.4,
+    cellprob_threshold: float = 0.0,
+    gpu: bool = True,
+    remove_edge_cells: bool = True,
 ) -> np.ndarray:
-    """Prepare a 3-channel RGB image for Cellpose.
-
-    Cellpose expects: [Red, Green, Blue] where typically:
-    - Red: helper channel (zeros if not used)
-    - Green: cytoplasm channel
-    - Blue: nuclei channel (DAPI)
+    """Segment nuclei only with brieflow's ``segment_cellpose(cells=False)``.
 
     Args:
-        image: Input image with shape (C, Y, X).
-        nuclei_channel: Index of nuclear channel.
-        cyto_channel: Index of cytoplasmic channel.
-        logscale: Whether to apply log scaling to cytoplasm.
+        image: Input image, (C, Y, X) or a single 2D channel.
+        nuclei_channel: Index of the nuclear channel (ignored for a 2D image).
+        nuclei_diameter: Nuclear diameter in pixels (None lets Cellpose pick).
+        model: Cellpose model (brieflow ``CELLPOSE_MODEL``; e.g. "nuclei", "cyto3", "cpsam"
+            or a custom model path). None uses :func:`brieflow_nuclei_model`.
+        flow_threshold: Flow error threshold.
+        cellprob_threshold: Cell probability threshold.
+        gpu: Whether to use GPU.
+        remove_edge_cells: Remove nuclei touching the image border (brieflow always does).
 
     Returns:
-        RGB image with shape (3, Y, X) as uint8.
+        Labeled nuclei mask.
     """
-    dapi = image[nuclei_channel].astype(np.float32)
-    cyto = image[cyto_channel].astype(np.float32)
-    helper = np.zeros_like(cyto)
+    from goudacell.brieflow.shared import segment_cellpose as bf
 
-    # Log scale cytoplasm channel
-    if logscale:
-        cyto = np.log1p(cyto)
-        if cyto.max() > 0:
-            cyto = cyto / cyto.max()
+    if image.ndim == 2:
+        image, nuclei_channel = image[np.newaxis], 0
+    model = model or brieflow_nuclei_model()
 
-    # Normalize DAPI
-    dapi_upper = np.percentile(dapi, 99.5)
-    if dapi_upper > 0:
-        dapi = dapi / dapi_upper
-    dapi = np.clip(dapi, 0, 1)
-
-    # Convert to uint8
-    red = img_as_ubyte(helper)
-    green = img_as_ubyte(cyto)
-    blue = img_as_ubyte(dapi)
-
-    return np.array([red, green, blue])
-
-
-def _center_pixels(label_image: np.ndarray) -> np.ndarray:
-    """Reduce each labelled region to a single pixel at its bounding-box centre.
-
-    Used to test which cell a nucleus belongs to without a large nucleus
-    straddling a cell boundary.
-    """
-    centered = np.zeros_like(label_image)
-    for r in regionprops(label_image):
-        i, j = np.array(r.bbox).reshape(2, 2).mean(axis=0).astype(int)
-        centered[i, j] = r.label
-    return centered
+    if remove_edge_cells:
+        return bf.segment_cellpose(
+            image,
+            dapi_index=nuclei_channel,
+            cyto_index=nuclei_channel,
+            nuclei_diameter=nuclei_diameter,
+            cell_diameter=None,
+            cellpose_kwargs=dict(
+                nuclei_flow_threshold=flow_threshold, nuclei_cellprob_threshold=cellprob_threshold
+            ),
+            cellpose_model=model,
+            gpu=gpu,
+            cells=False,
+        )
+    # segment_cellpose always clears edges; this is its body with remove_edges=False
+    rgb = bf.prepare_cellpose(image, nuclei_channel, nuclei_channel)
+    return bf.segment_cellpose_nuclei_rgb(
+        rgb,
+        nuclei_diameter,
+        cellpose_model=model,
+        gpu=gpu,
+        remove_edges=False,
+        flow_threshold=flow_threshold,
+        cellprob_threshold=cellprob_threshold,
+    )
 
 
-def _relabel_array(arr: np.ndarray, new_label_dict: dict) -> np.ndarray:
-    """Map integer values in ``arr`` via ``new_label_dict``; unmapped values -> 0."""
-    n = int(arr.max())
-    lookup = np.zeros(n + 1)
-    for old_val, new_val in new_label_dict.items():
-        if old_val <= n:
-            lookup[old_val] = new_val
-    return lookup[arr]
-
-
-def reconcile_nuclei_cells(
-    nuclei: np.ndarray, cells: np.ndarray, how: str = "consensus"
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Reconcile independently-segmented nuclei and cell masks by overlap.
-
-    Cellpose segments nuclei and cells in separate passes, so their labels do
-    not correspond and some cells contain no nucleus. This matches each nucleus
-    to the cell it sits in, drops nucleus-less cells (and orphan nuclei), and
-    relabels both masks so a cell and its nucleus share one label — the
-    numbering the feature tables rely on to join compartments.
-
-    Ported from brieflow (``lib/shared/segmentation_utils.py``).
+def identify_cytoplasm(nuclei: np.ndarray, cells: np.ndarray) -> Optional[np.ndarray]:
+    """Cytoplasm masks from brieflow's ``identify_cytoplasm_cellpose``.
 
     Args:
-        nuclei: Labeled nuclei mask.
+        nuclei: Labeled nuclei mask (labels shared with ``cells``).
         cells: Labeled cell mask.
-        how: Reconciliation method.
-            - "consensus": keep only pairs whose nucleus<->cell match is mutual
-              and unique (drops cells with 0 or >1 nuclei).
-            - "contained_in_cells": keep every cell containing a nucleus, merging
-              multiple nuclei under the cell's label.
 
     Returns:
-        Tuple of (nuclei, cells) with matched, consecutive labels. Both are all
-        zeros if no pair survives.
+        Labeled cytoplasm mask, or None when the masks are not reconciled (goudacell's
+        ``reconcile: null``), where brieflow would raise.
     """
+    if len(np.unique(nuclei)) != len(np.unique(cells)):
+        return None
+    return identify_cytoplasm_cellpose(nuclei, cells)
 
-    def get_unique_label_map(regions, keep_multiple=False):
-        label_map = {}
-        for region in regions:
-            intensity_image = region.intensity_image[region.intensity_image > 0]
-            labels = np.unique(intensity_image)
-            if keep_multiple:
-                label_map[region.label] = labels
-            elif len(labels) == 1:
-                label_map[region.label] = labels[0]
-        return label_map
 
-    # Erode nuclei to their centre pixel so each maps to a single cell.
-    nuclei_eroded = _center_pixels(nuclei)
+def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
+    """Detect secondary objects with brieflow's ``segment_second_objs_from_config``.
 
-    nucleus_map = get_unique_label_map(regionprops(nuclei_eroded, intensity_image=cells))
-    if how == "contained_in_cells":
-        cell_map = get_unique_label_map(
-            regionprops(cells, intensity_image=nuclei_eroded), keep_multiple=True
-        )
-    else:
-        cell_map = get_unique_label_map(regionprops(cells, intensity_image=nuclei_eroded))
+    Nucleus centroids for the cell-nucleus distances come from the nuclei mask, as in
+    brieflow's phenotype notebook.
 
-    # Keep nucleus-cell pairs that agree on each other.
-    keep = []
-    for nucleus in nucleus_map:
-        try:
-            if how == "contained_in_cells":
-                if nucleus in cell_map[nucleus_map[nucleus]]:
-                    keep.append([nucleus, nucleus_map[nucleus]])
-            else:
-                if cell_map[nucleus_map[nucleus]] == nucleus:
-                    keep.append([nucleus, nucleus_map[nucleus]])
-        except KeyError:
-            pass
+    Args:
+        image: Multichannel image (C, H, W).
+        nuclei_masks: Reconciled nuclei mask (centroids for nucleus distances).
+        cell_masks: Reconciled cell mask.
+        params: SecondaryObjectParams.
+        gpu: Whether the ML methods may use the GPU.
 
-    if len(keep) == 0:
-        return np.zeros_like(nuclei), np.zeros_like(cells)
+    Returns:
+        Tuple of (second_obj_masks, cell_second_obj_table, updated_cytoplasm_masks).
+    """
+    from goudacell.brieflow.phenotype.segment_secondary_object import (
+        segment_second_objs_from_config,
+    )
 
-    keep_nuclei, keep_cells = zip(*keep)
-
-    if how == "contained_in_cells":
-        nuclei = _relabel_array(
-            nuclei, {nuclei_label: cell_label for nuclei_label, cell_label in keep}
-        )
-        cells[~np.isin(cells, keep_cells)] = 0
-        labels, cell_indices = np.unique(cells, return_inverse=True)
-        _, nuclei_indices = np.unique(nuclei, return_inverse=True)
-        cells = np.arange(0, labels.shape[0])[cell_indices.reshape(*cells.shape)]
-        nuclei = np.arange(0, labels.shape[0])[nuclei_indices.reshape(*nuclei.shape)]
-    else:
-        nuclei = _relabel_array(
-            nuclei, {label: i + 1 for i, label in enumerate(keep_nuclei)}
-        )
-        cells = _relabel_array(
-            cells, {label: i + 1 for i, label in enumerate(keep_cells)}
-        )
-
-    return nuclei.astype(int), cells.astype(int)
+    centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
+    return segment_second_objs_from_config(
+        image=image,
+        cell_masks=cell_masks,
+        cytoplasm_masks=identify_cytoplasm(nuclei_masks, cell_masks),
+        second_obj_params=params.to_brieflow_params(gpu),
+        nuclei_centroids=centroids,
+    )
 
 
 # Parameters that can be swept, mapped to the attribute suffix they override.
@@ -417,6 +387,7 @@ _DUAL_FIELDS = (
     "nuclei_cellprob_threshold",
     "cell_flow_threshold",
     "cell_cellprob_threshold",
+    "helper_channel",
 )
 
 
@@ -499,6 +470,26 @@ def _segment_with_overrides(
 
     prefix = "nuclei" if target == "nuclei" else "cell"
     channel = params.nuclei_channel if target == "nuclei" else params.cyto_channel
+    if mode == "nuclei":
+        baseline = {
+            "model": params.nuclei_model,
+            "diameter": params.nuclei_diameter,
+            "flow_threshold": params.nuclei_flow_threshold,
+            "cellprob_threshold": params.nuclei_cellprob_threshold,
+        }
+        for attr, value in overrides.items():
+            baseline[attr.split("_", 1)[1]] = value
+        return segment_nuclei(
+            image,
+            nuclei_channel=channel,
+            nuclei_diameter=baseline["diameter"],
+            model=baseline["model"],
+            flow_threshold=baseline["flow_threshold"],
+            cellprob_threshold=baseline["cellprob_threshold"],
+            gpu=gpu,
+            remove_edge_cells=remove_edge_cells,
+        )
+
     seg_image = image[channel] if image.ndim == 3 else image
     baseline = {
         "model": getattr(params, f"{prefix}_model"),
@@ -813,3 +804,73 @@ def estimate_diameter(
     diameter = max(5.0, float(diameter))
 
     return diameter
+
+
+
+
+def estimate_diameters(
+    image: np.ndarray,
+    nuclei_channel: int,
+    cyto_channel: int,
+    cell_model: str = "cyto3",
+    helper_channel: Optional[int] = None,
+    gpu: bool = True,
+) -> Tuple[float, float]:
+    """Estimate nuclei and cell diameters with brieflow's ``estimate_diameters``.
+
+    Only Cellpose 3.x built-in models have a size model. For Cellpose 4.x, cpsam and
+    custom models, segment with ``diameter=None`` and use :func:`derive_diameters`, as
+    brieflow's phenotype notebook does.
+
+    Args:
+        image: Input image with shape (C, Y, X).
+        nuclei_channel: Index of the nuclear channel.
+        cyto_channel: Index of the cytoplasmic channel.
+        cell_model: Built-in Cellpose 3.x model for the cell estimate.
+        helper_channel: Optional helper channel for the red plane.
+        gpu: Whether to use GPU.
+
+    Returns:
+        Tuple of (nuclei_diameter, cell_diameter) in pixels.
+
+    Raises:
+        NotImplementedError: With Cellpose 4.x, or for cpsam / custom model paths.
+    """
+    from goudacell.brieflow.shared import segment_cellpose as bf
+
+    if bf.CELLPOSE_4X or cell_model == "cpsam" or _is_custom_model(cell_model):
+        raise NotImplementedError(
+            "Automatic diameter estimation needs Cellpose 3.x and a built-in model. "
+            "Segment with diameter=None and use derive_diameters(), or set diameters "
+            "explicitly."
+        )
+    return bf.estimate_diameters(
+        image,
+        dapi_index=nuclei_channel,
+        cyto_index=cyto_channel,
+        helper_index=helper_channel,
+        cellpose_model=cell_model,
+        gpu=gpu,
+    )
+
+
+def derive_diameters(
+    nuclei: np.ndarray, cells: Optional[np.ndarray] = None
+) -> Tuple[float, Optional[float]]:
+    """Mean equivalent diameter of segmented nuclei and cells.
+
+    How brieflow's phenotype notebook sets the configured diameters for cpsam, which
+    has no size model: segment once with ``diameter=None``, then measure the objects.
+
+    Args:
+        nuclei: Labeled nuclei mask.
+        cells: Optional labeled cell mask.
+
+    Returns:
+        Tuple of (nuclei_diameter, cell_diameter); cell_diameter is None without cells.
+    """
+    nuclei_diameter = float(np.mean([r.equivalent_diameter for r in regionprops(nuclei)]))
+    cell_diameter = None
+    if cells is not None:
+        cell_diameter = float(np.mean([r.equivalent_diameter for r in regionprops(cells)]))
+    return nuclei_diameter, cell_diameter

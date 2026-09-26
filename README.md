@@ -116,37 +116,129 @@ counts/areas merged into the main feature table.
 
 ### CellProfiler backend (headless)
 
-`feature_extraction.method: cellprofiler` runs a CellProfiler pipeline headless on each
-image's masks instead of the built-in extractor. CellProfiler lives in its own env (it needs
-Python 3.9, numpy<2 and Java); create it once, on a compute node (the solve is heavy):
+`feature_extraction.method: cellprofiler` measures each image's masks with a real
+CellProfiler pipeline, run headless, instead of the built-in extractor.
+
+#### Why a second conda env
+
+CellProfiler 4.2 needs Python 3.9 and numpy<2, and goudacell needs Python ≥3.10 and
+numpy≥2, so the two can't share an env. goudacell never imports CellProfiler: it runs the
+`cellprofiler` command from a separate env as a subprocess. You keep working (notebook
+kernel, CLI) in the `goudacell` env, and only need the CellProfiler env to exist.
+
+#### 1. Create the CellProfiler env (once)
+
+From the repo root:
 
 ```bash
-bash scripts/setup_cellprofiler_env.sh   # conda env goudacell_cp from envs/cellprofiler.yml
+bash scripts/setup_cellprofiler_env.sh
 ```
 
-Then pick the `cellprofiler` method (notebook or config); nothing else is needed. goudacell
-finds CellProfiler by itself: `cellprofiler_cmd` in the config if set, else the
-`GOUDACELL_CELLPROFILER` env var, `cellprofiler` on PATH, then the `goudacell_cp` env's
-`bin/cellprofiler`. Without a `pipeline_file` it runs its default pipeline
-(`src/goudacell/data/goudacell_default.cppipe`, filled in for your channels and masks):
-MeasureObjectIntensity, MeasureObjectSizeShape (with Zernike), MeasureTexture (scale 3),
-MeasureColocalization (within objects, all channel pairs), MeasureObjectNeighbors (adjacent
-nuclei and cells), ExportToSpreadsheet. To use your own pipeline, set `pipeline_file` (the
-notebook's "CP pipeline" field); `goudacell.features_cellprofiler.default_pipeline([...])`
-gives the default's text for your channels as a starting point to open in the GUI.
+This creates the conda env `goudacell_cp` from `envs/cellprofiler.yml` (CellProfiler
+4.2.8.1, Python 3.9 and Java, from conda-forge and bioconda) and checks it. If the env
+already exists, the script only checks it. The solve is heavy, so on a shared cluster run
+the script on a compute node. It takes a few minutes with the libmamba solver. If you'd
+rather run conda yourself, this is the equivalent command:
 
-For each image goudacell writes one input folder with every channel as `<channel name>.tif`
-(the `channel_names`) and the masks as `nuclei_mask.tif`, `cell_mask.tif` and
-`cytoplasm_mask.tif`, then runs `cellprofiler -c -r -p <pipeline> -i <input> -o <output>`.
-Build the pipeline in the CellProfiler GUI on such a folder: in NamesAndTypes assign each
-channel file as a grayscale image and the masks as **Objects** named `Nuclei`, `Cells` and
-`Cytoplasm`; add the Measure modules you want; end with ExportToSpreadsheet (CSV, one file
-per object). goudacell joins those three object tables on the mask `label`, with columns
-`nucleus_`/`cell_`/`cytoplasm_` + CellProfiler's names (e.g. `cell_Intensity_MeanIntensity_GFP`,
-intensities scaled to 0–1). A pipeline that loads a mask the mode doesn't produce (e.g.
-`Cells` in nuclei mode) finds no image set and fails with the list of staged files.
-`pytest tests/test_cellprofiler_backend.py` runs a minimal pipeline and the default one with
-the CellProfiler it finds (skipped without one).
+```bash
+conda env create --solver=libmamba -f envs/cellprofiler.yml
+```
+
+conda ≥23.10 uses libmamba by default. On an older conda, install the solver into base
+with `conda install -n base -c conda-forge conda-libmamba-solver`. If you can't install
+it, drop `--solver=libmamba`: the classic solver still works but can take a very long time.
+
+#### 2. Check it
+
+```bash
+conda run -n goudacell_cp cellprofiler --version   # prints 4.2.8.1 (after some warnings)
+```
+
+#### 3. Use it
+
+Select the `cellprofiler` method in the notebook, or in the config:
+
+```yaml
+feature_extraction:
+  enabled: true
+  method: cellprofiler
+```
+
+Nothing else is needed. goudacell looks for CellProfiler in this order:
+
+1. `cellprofiler_cmd` in the config (the notebook's "CP command" field), if set;
+2. the `GOUDACELL_CELLPROFILER` environment variable;
+3. a `cellprofiler` command on your PATH;
+4. the `goudacell_cp` conda env, found through conda without activating it.
+
+Before running, goudacell checks the command with `cellprofiler --version`. It must be
+CellProfiler 4.2.x; if not, the notebook and the CLI stop with an error that says which
+command was found and what to do. To use a CellProfiler installed some other way (another
+env name, a module, a container wrapper), point goudacell at its executable:
+
+```bash
+export GOUDACELL_CELLPROFILER=/path/to/cellprofiler-env/bin/cellprofiler
+```
+
+or set `cellprofiler_cmd: /path/to/cellprofiler-env/bin/cellprofiler` in the config.
+
+#### The pipeline
+
+Without a `pipeline_file`, goudacell runs its default pipeline
+(`src/goudacell/data/goudacell_default.cppipe`, filled in for your channels and masks).
+It runs these modules:
+
+- MeasureObjectIntensity
+- MeasureObjectSizeShape (with Zernike)
+- MeasureTexture (scale 3)
+- MeasureColocalization (within objects, all channel pairs)
+- MeasureObjectNeighbors (adjacent nuclei and cells)
+- ExportToSpreadsheet
+
+The Texture, Correlation and Neighbors switches turn their modules off. To substitute your
+own pipeline, set `pipeline_file` (the notebook's "CP pipeline" field) to a `.cppipe`. As a
+starting point, `goudacell.features_cellprofiler.default_pipeline(["DAPI", "GFP"])` returns
+the default's text for your channels; save it as a `.cppipe` and open it in the CellProfiler
+GUI.
+
+For each image, goudacell writes one input folder:
+
+- every channel as `<channel name>.tif` (the `channel_names`);
+- the masks as `nuclei_mask.tif`, `cell_mask.tif` and `cytoplasm_mask.tif`.
+
+It then runs `cellprofiler -c -r -p <pipeline> -i <input> -o <output>`. A pipeline of your
+own must follow the same layout:
+
+- In NamesAndTypes, assign each channel file as a grayscale image, and the masks as
+  **Objects** named `Nuclei`, `Cells` and `Cytoplasm`.
+- Add the Measure modules you want.
+- End with ExportToSpreadsheet (CSV, one file per object).
+
+goudacell joins those three object tables on the mask `label`. The columns are
+`nucleus_`/`cell_`/`cytoplasm_` plus CellProfiler's names (e.g.
+`cell_Intensity_MeanIntensity_GFP`), with intensities scaled to 0–1. A pipeline that loads a
+mask the mode doesn't produce (e.g. `Cells` in nuclei mode) finds no image set and fails
+with the list of staged files. `pytest tests/test_cellprofiler_backend.py` runs a minimal
+pipeline and the default one with the CellProfiler it finds, and skips those tests when it
+finds none.
+
+#### Troubleshooting
+
+- **"this notebook runs in the `goudacell` env…"**: the notebook kernel is the CellProfiler
+  env. Switch the kernel to `goudacell`.
+- **Solver slow or hanging**: use libmamba (see step 1); the classic solver can run for a
+  very long time on this recipe.
+- **SSL/certificate errors while solving or downloading**: this is usually a proxy or an
+  outdated CA bundle. Try `conda update -n base ca-certificates certifi`, or point conda at
+  your institution's CA bundle with `conda config --set ssl_verify /path/to/ca-bundle.crt`.
+  If a separately installed `mamba` fails this way, use `conda ... --solver=libmamba`
+  instead.
+- **Java not found / "JVM" errors when CellProfiler reads images**: the env needs its own
+  Java. Run `conda install -n goudacell_cp -c conda-forge openjdk`.
+- **Wrong CellProfiler version**: goudacell supports 4.2.x. Check which command it found
+  (the error names it), unset or fix `GOUDACELL_CELLPROFILER`/`cellprofiler_cmd`, or rebuild
+  the env with `conda env remove -n goudacell_cp` and rerun the setup script.
+- **Warnings on `cellprofiler --version`** (pkg_resources, SciPy/NumPy version) are harmless.
 
 ## Which Cellpose Version?
 

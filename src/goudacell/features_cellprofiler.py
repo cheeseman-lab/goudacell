@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 import tifffile
 
+from goudacell.environment import CELLPROFILER_ENV
+
 # Pipeline object name -> (staged mask file stem, goudacell column prefix)
 STAGED_OBJECTS = {
     "Nuclei": ("nuclei_mask", "nucleus"),
@@ -34,8 +36,9 @@ STAGED_OBJECTS = {
     "Cytoplasm": ("cytoplasm_mask", "cytoplasm"),
 }
 
-CELLPROFILER_ENV = "goudacell_cp"
 SETUP_SCRIPT = "scripts/setup_cellprofiler_env.sh"
+# CellProfiler versions the default pipeline and the staging are tested with
+SUPPORTED_VERSION = "4.2."
 DEFAULT_PIPELINE = Path(__file__).parent / "data" / "goudacell_default.cppipe"
 # Objects the default pipeline measures neighbors of (cytoplasm borders follow the cells)
 NEIGHBOR_OBJECTS = ("Nuclei", "Cells")
@@ -52,9 +55,16 @@ def find_cellprofiler() -> Optional[str]:
     Returns:
         The command, or None if no CellProfiler was found.
     """
-    found = os.environ.get("GOUDACELL_CELLPROFILER") or shutil.which("cellprofiler")
-    if found:
-        return found
+    return _locate_cellprofiler()[0]
+
+
+def _locate_cellprofiler() -> Tuple[Optional[str], str]:
+    """The CellProfiler command :func:`find_cellprofiler` picks, and where it came from."""
+    if os.environ.get("GOUDACELL_CELLPROFILER"):
+        return os.environ["GOUDACELL_CELLPROFILER"], "the GOUDACELL_CELLPROFILER env var"
+    if shutil.which("cellprofiler"):
+        return shutil.which("cellprofiler"), "cellprofiler on PATH"
+    source = f"the '{CELLPROFILER_ENV}' conda env"
     conda_exe = os.environ.get("CONDA_EXE")
     bases = [Path(conda_exe).parent.parent] if conda_exe else []
     if Path(sys.prefix).parent.name == "envs":
@@ -62,23 +72,79 @@ def find_cellprofiler() -> Optional[str]:
     for base in bases:
         cmd = base / "envs" / CELLPROFILER_ENV / "bin" / "cellprofiler"
         if os.access(cmd, os.X_OK):
-            return str(cmd)
+            return str(cmd), source
     # Envs outside the base (other envs_dirs) are only known to conda itself
     conda = conda_exe or shutil.which("conda")
     if conda is None:
-        return None
+        return None, ""
     try:
         listed = subprocess.run(
             [conda, "env", "list", "--json"], capture_output=True, text=True, timeout=60
         )
         envs = [Path(env) for env in json.loads(listed.stdout)["envs"]]
     except (OSError, subprocess.SubprocessError, ValueError, KeyError):
-        return None
+        return None, ""
     for env in envs:
         cmd = env / "bin" / "cellprofiler"
         if env.name == CELLPROFILER_ENV and os.access(cmd, os.X_OK):
-            return str(cmd)
-    return None
+            return str(cmd), source
+    return None, ""
+
+
+# Command -> version of the CellProfilers that passed check_cellprofiler (failures rerun)
+_CHECKED_VERSIONS = {}
+
+
+def check_cellprofiler(cellprofiler_cmd: Optional[str] = None) -> str:
+    """Check that a CellProfiler command runs and is a supported version (4.2.x).
+
+    Runs ``<cmd> --version`` once per command; a passing command is cached.
+
+    Args:
+        cellprofiler_cmd: CellProfiler executable. If None, found by
+            :func:`find_cellprofiler`.
+
+    Returns:
+        The checked command.
+
+    Raises:
+        RuntimeError: If no CellProfiler is found, the command doesn't exist, isn't
+            CellProfiler, or isn't a supported version; the message says what to do.
+    """
+    if cellprofiler_cmd in _CHECKED_VERSIONS:
+        return cellprofiler_cmd
+    located, source = _locate_cellprofiler()
+    if cellprofiler_cmd and cellprofiler_cmd != located:
+        source = "cellprofiler_cmd, set in the config or the notebook's CP command"
+    cellprofiler_cmd = cellprofiler_cmd or located
+    fix = (
+        f"Run {SETUP_SCRIPT} to create the '{CELLPROFILER_ENV}' conda env, or set "
+        "GOUDACELL_CELLPROFILER (or cellprofiler_cmd) to a CellProfiler 4.2 executable."
+    )
+    if cellprofiler_cmd is None:
+        raise RuntimeError(
+            "CellProfiler not found (looked at GOUDACELL_CELLPROFILER, cellprofiler on PATH "
+            f"and the '{CELLPROFILER_ENV}' conda env). {fix}"
+        )
+    found = f"CellProfiler command {cellprofiler_cmd!r} (from {source})"
+    if shutil.which(cellprofiler_cmd) is None:
+        raise RuntimeError(f"{found} doesn't exist or isn't executable. {fix}")
+    try:
+        run = subprocess.run(
+            [cellprofiler_cmd, "--version"], capture_output=True, text=True, timeout=300
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        raise RuntimeError(f"{found} failed to run ({err}). {fix}") from err
+    versions = re.findall(r"^(\d+\.\d+\S*)\s*$", run.stdout, re.MULTILINE)
+    if run.returncode != 0 or not versions:
+        raise RuntimeError(
+            f"{found} is not a working CellProfiler: '--version' exited {run.returncode} "
+            f"without a version.\n{(run.stderr or run.stdout).strip()[-1000:]}\n{fix}"
+        )
+    if not versions[-1].startswith(SUPPORTED_VERSION):
+        raise RuntimeError(f"{found} is CellProfiler {versions[-1]}, not 4.2.x. {fix}")
+    _CHECKED_VERSIONS[cellprofiler_cmd] = versions[-1]
+    return cellprofiler_cmd
 
 
 def default_pipeline(
@@ -202,25 +268,15 @@ def extract_features_cellprofiler(
 
     Raises:
         FileNotFoundError: If pipeline_file doesn't exist.
-        RuntimeError: If the executable is not found, CellProfiler fails, or it
-            exports no object table.
+        RuntimeError: If the executable is not a supported CellProfiler
+            (:func:`check_cellprofiler`), CellProfiler fails, or it exports no object table.
     """
     if pipeline_file is not None:
         pipeline_file = Path(pipeline_file).resolve()
         if not pipeline_file.exists():
             raise FileNotFoundError(f"Pipeline file not found: {pipeline_file}")
 
-    cellprofiler_cmd = cellprofiler_cmd or find_cellprofiler()
-    if cellprofiler_cmd is None:
-        raise RuntimeError(
-            f"CellProfiler not found. Create its '{CELLPROFILER_ENV}' conda env with "
-            f"{SETUP_SCRIPT}, or set cellprofiler_cmd or GOUDACELL_CELLPROFILER."
-        )
-    if shutil.which(cellprofiler_cmd) is None:
-        raise RuntimeError(
-            f"CellProfiler executable not found: '{cellprofiler_cmd}'. "
-            "Install CellProfiler or provide the full path via cellprofiler_cmd."
-        )
+    cellprofiler_cmd = check_cellprofiler(cellprofiler_cmd)
 
     if image.ndim == 2:
         image = image[np.newaxis, ...]

@@ -17,9 +17,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goudacell import features_cellprofiler
 from goudacell.features import extract_features
 from goudacell.features_cellprofiler import (
     _label_object_table,
+    check_cellprofiler,
     default_pipeline,
     extract_features_cellprofiler,
     find_cellprofiler,
@@ -319,3 +321,51 @@ def test_missing_cellprofiler_names_setup_script(no_cellprofiler, tile):
     image, nuclei, cells = tile
     with pytest.raises(RuntimeError, match="setup_cellprofiler_env.sh"):
         extract_features_cellprofiler(image, nuclei, cells)
+
+
+@pytest.fixture
+def fresh_checks(monkeypatch):
+    """check_cellprofiler without the commands earlier tests cached."""
+    monkeypatch.setattr(features_cellprofiler, "_CHECKED_VERSIONS", {})
+
+
+def test_check_cellprofiler(no_cellprofiler, fresh_checks, monkeypatch):
+    root = no_cellprofiler
+    with pytest.raises(RuntimeError, match="CellProfiler not found.*setup_cellprofiler_env.sh"):
+        check_cellprofiler()
+
+    # A supported version passes, and `--version` runs once per command
+    calls = root / "calls"
+    good = _executable(root / "good/cellprofiler", f"echo run >> {calls}; echo 4.2.8.1")
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(good))
+    assert check_cellprofiler() == str(good)
+    assert check_cellprofiler(str(good)) == str(good)
+    assert calls.read_text().count("run") == 1
+
+    old = _executable(root / "old/cellprofiler", "echo 4.1.3")
+    with pytest.raises(RuntimeError, match="from cellprofiler_cmd.*is CellProfiler 4.1.3, not 4.2.x"):
+        check_cellprofiler(str(old))
+    not_cp = _executable(root / "other/cellprofiler", "echo boom >&2; exit 2")
+    with pytest.raises(RuntimeError, match="(?s)not a working CellProfiler.*exited 2.*boom"):
+        check_cellprofiler(str(not_cp))
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(root / "missing/cellprofiler"))
+    with pytest.raises(RuntimeError, match="from the GOUDACELL_CELLPROFILER env var.*doesn't exist"):
+        check_cellprofiler()
+
+
+def test_cli_fails_before_segmenting(no_cellprofiler, fresh_checks, monkeypatch):
+    from typer.testing import CliRunner
+
+    from goudacell.cli import app
+
+    root = no_cellprofiler
+    (root / "data").mkdir()
+    config = root / "config.yaml"
+    config.write_text(
+        f"input_dir: {root / 'data'}\noutput_dir: {root / 'out'}\n"
+        "feature_extraction:\n  enabled: true\n  method: cellprofiler\n"
+    )
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(root / "missing/cellprofiler"))
+    result = CliRunner().invoke(app, ["segment", str(config)])
+    assert result.exit_code == 1
+    assert "GOUDACELL_CELLPROFILER" in result.output and "No files found" not in result.output

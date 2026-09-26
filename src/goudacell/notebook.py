@@ -24,7 +24,6 @@ Custom per-cell features (brieflow ``CUSTOM_FEATURES``) are registered in code w
 ``ui.set_custom_features([my_feature, (other_feature, "cell")])``.
 """
 
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,12 +35,8 @@ from goudacell.config import (
     SecondaryObjectParams,
     SegmentationConfig,
 )
-from goudacell.features_cellprofiler import (
-    CELLPROFILER_ENV,
-    DEFAULT_PIPELINE,
-    SETUP_SCRIPT,
-    find_cellprofiler,
-)
+from goudacell.environment import check_environment
+from goudacell.features_cellprofiler import DEFAULT_PIPELINE, check_cellprofiler, find_cellprofiler
 
 COMPARTMENTS = ["nucleus", "cell", "cytoplasm"]
 METHODS = ["cp_emulator", "cp_measure", "cellprofiler"]
@@ -173,11 +168,10 @@ def _cellprofiler_problem(fe: Optional[FeatureExtractionParams]) -> Optional[str
         return None
     if fe.pipeline_file and not Path(fe.pipeline_file).is_file():
         return f"CellProfiler pipeline not found: {fe.pipeline_file!r}"
-    cmd = fe.cellprofiler_cmd or find_cellprofiler()
-    if cmd is None:
-        return f"CellProfiler not found: create its '{CELLPROFILER_ENV}' env with {SETUP_SCRIPT}"
-    if shutil.which(cmd) is None:
-        return f"CellProfiler command not found: {cmd!r}"
+    try:
+        check_cellprofiler(fe.cellprofiler_cmd)
+    except RuntimeError as err:
+        return str(err)
     return None
 
 
@@ -220,7 +214,12 @@ class ParameterUI:
             config_dir: Where the generated config YAML is saved.
             nuclei_model: Override the nuclei-only model (default: auto by version).
             cell_model: Override the cell model (default: auto by version).
+
+        Raises:
+            RuntimeError: If the kernel is not a working goudacell env (e.g. the
+                CellProfiler env).
         """
+        check_environment(require_cellpose=True)
         self.input_dir = input_dir
         self.file_pattern = file_pattern
         self.output_dir = output_dir
@@ -466,12 +465,17 @@ class ParameterUI:
         self.feat_cp_pipeline = widgets.Text(
             value="", placeholder=f"default: {DEFAULT_PIPELINE.name}", description="CP pipeline:"
         )
+        # Checked on Enter/blur, not per keystroke: each check runs `<cmd> --version`
         self.feat_cp_cmd = widgets.Text(
             value=find_cellprofiler() or "",
-            placeholder=f"not found: run {SETUP_SCRIPT}",
+            placeholder="not found: see the README",
             description="CP command:",
+            continuous_update=False,
         )
-        self.feat_cp_box = widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd])
+        self.feat_cp_status = widgets.HTML("")
+        self.feat_cp_box = widgets.VBox(
+            [widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd]), self.feat_cp_status]
+        )
         self.feat_channels = widgets.Text(
             value="", placeholder="all (e.g. 0,2)", description="Channels:"
         )
@@ -740,6 +744,8 @@ class ParameterUI:
         self.so_enabled.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.feat_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.feat_method.observe(lambda _c: self._check_cellprofiler(), names="value")
+        self.feat_cp_cmd.observe(lambda _c: self._check_cellprofiler(), names="value")
         self.so_run_btn.on_click(self._on_second_objs)
         self.config_btn.on_click(self._on_generate)
 
@@ -772,6 +778,23 @@ class ParameterUI:
         self.image_w.options = options
         if options:
             self.image_w.value = options[0][1]
+
+    def _check_cellprofiler(self) -> None:
+        """Show whether the CellProfiler command runs, once the backend is selected."""
+        import html
+
+        if self.feat_method.value != "cellprofiler":
+            self.feat_cp_status.value = ""
+            return
+        self.feat_cp_status.value = "<i>Checking CellProfiler (<code>--version</code>)…</i>"
+        try:
+            cmd = check_cellprofiler(self.feat_cp_cmd.value.strip() or None)
+        except RuntimeError as err:
+            error = html.escape(str(err))
+            self.feat_cp_status.value = f"<b style='color:#b31d28'>Error: {error}</b>"
+            return
+        ok = html.escape(cmd)
+        self.feat_cp_status.value = f"<i style='color:#1a7f37'>CellProfiler OK: {ok}</i>"
 
     def _gpu_banner_html(self) -> str:
         """Render the GPU status banner HTML."""

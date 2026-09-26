@@ -35,7 +35,14 @@ Outputs change for existing configs:
   `goudacell.features_cp_measure`, `features.FEATURES_BASIC` and
   `extract_features(foci_params=...)`. `segment.reconcile_nuclei_cells` is still importable.
 - **CellProfiler backend**: fixed. 0.3.0 silently returned empty tables; it now joins the
-  Nuclei/Cells/Cytoplasm tables on the mask `label` and raises on a failed run.
+  Nuclei/Cells/Cytoplasm tables on the mask `label` and raises on a failed run. It finds
+  CellProfiler by itself (`GOUDACELL_CELLPROFILER`, PATH, or the `goudacell_cp` env made by
+  `scripts/setup_cellprofiler_env.sh` from `envs/cellprofiler.yml`) and runs a default pipeline
+  when `pipeline_file` is unset. `cellprofiler_cmd` defaults to unset instead of
+  `"cellprofiler"`; an explicit command still wins. The command is checked to be CellProfiler
+  4.2.x before any segmentation.
+- **Wrong-env check**: `import goudacell` raises in the `goudacell_cp` env, on Python < 3.10 or
+  with numpy < 2, with a message saying to switch to the `goudacell` env.
 - **`goudacell segment` exit status**: it now ends with a summary of the failed files and exits
   1 when every file failed (0.3.0 always exited 0). A partial failure still exits 0.
 - **numpy** is pinned below 2.4: numpy 2.4 removed `np.in1d`, which the vendored foci and

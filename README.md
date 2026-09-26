@@ -76,6 +76,10 @@ Open the notebook at `notebooks/segmentation.ipynb` and:
 sbatch scripts/run_segmentation.sh configs/segmentation_config.yaml
 ```
 
+`goudacell segment` keeps going when one file fails and ends with a summary of the failed
+files. It exits 1 only when no file succeeded; when some files fail it keeps the outputs of the
+others and exits 0, so check the summary at the end of the log.
+
 ### Project layout
 
 Generated artifacts are kept out of the source tree:

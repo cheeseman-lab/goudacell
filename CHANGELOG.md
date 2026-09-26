@@ -36,5 +36,7 @@ Outputs change for existing configs:
   `extract_features(foci_params=...)`. `segment.reconcile_nuclei_cells` is still importable.
 - **CellProfiler backend**: fixed. 0.3.0 silently returned empty tables; it now joins the
   Nuclei/Cells/Cytoplasm tables on the mask `label` and raises on a failed run.
+- **`goudacell segment` exit status**: it now ends with a summary of the failed files and exits
+  1 when every file failed (0.3.0 always exited 0). A partial failure still exits 0.
 - **numpy** is pinned below 2.4: numpy 2.4 removed `np.in1d`, which the vendored foci and
   secondary-object code calls.

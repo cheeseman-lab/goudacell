@@ -107,6 +107,7 @@ def segment(
     combined_second_obj_frames = []
     so = cfg.secondary_objects
     detect_second_objs = bool(cfg.mode == "dual" and so and so.second_obj_detection)
+    failed = []
 
     # Process each file
     with Progress(
@@ -257,6 +258,7 @@ def segment(
                         )
 
             except Exception as e:
+                failed.append(input_file.name)
                 progress.update(task, description=f"[red]Failed[/red] {input_file.name}: {e}")
                 console.print_exception()
 
@@ -275,6 +277,18 @@ def segment(
         combined_path = combined_path.with_name(f"{combined_path.stem}_second_objs.csv")
         combined.to_csv(combined_path, index=False)
         console.print(f"[green]Wrote combined secondary-object table[/green] {combined_path}")
+
+    # Exit 1 only when no file succeeded; a partial failure keeps the outputs and exits 0
+    if failed:
+        color = "red" if len(failed) == len(input_files) else "yellow"
+        console.print(
+            f"[{color}]{len(failed)} of {len(input_files)} files failed:[/{color}] "
+            + ", ".join(failed)
+        )
+        if len(failed) == len(input_files):
+            raise typer.Exit(1)
+    else:
+        console.print(f"[green]All {len(input_files)} files succeeded[/green]")
 
 
 @app.command()

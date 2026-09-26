@@ -1,15 +1,16 @@
 # ruff: noqa: E501
 """CellProfiler headless backend on a tiny synthetic image and masks.
 
-Runs CellProfiler from ``GOUDACELL_CELLPROFILER`` (a path to its ``cellprofiler``
-executable, e.g. a separate conda env's ``bin/cellprofiler``) or ``cellprofiler`` on PATH,
-and skips when neither exists. The pipeline below loads the files goudacell stages
+Runs the CellProfiler goudacell finds (``GOUDACELL_CELLPROFILER``, ``cellprofiler`` on
+PATH, or the ``goudacell_cp`` conda env from ``scripts/setup_cellprofiler_env.sh``), and
+skips when there is none. The pipeline below loads the files goudacell stages
 (``DAPI.tif``, ``GFP.tif`` and the masks as objects ``Nuclei``, ``Cells``, ``Cytoplasm``),
-measures intensity and size/shape, and exports CSVs.
+measures intensity and size/shape, and exports CSVs; the default pipeline is run too.
 """
 
-import os
+import json
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,12 +18,17 @@ import pandas as pd
 import pytest
 
 from goudacell.features import extract_features
-from goudacell.features_cellprofiler import _label_object_table
+from goudacell.features_cellprofiler import (
+    _label_object_table,
+    default_pipeline,
+    extract_features_cellprofiler,
+    find_cellprofiler,
+)
 
-CELLPROFILER = os.environ.get("GOUDACELL_CELLPROFILER") or shutil.which("cellprofiler")
+CELLPROFILER = find_cellprofiler()
 needs_cellprofiler = pytest.mark.skipif(
     CELLPROFILER is None or shutil.which(CELLPROFILER) is None,
-    reason="CellProfiler not found (set GOUDACELL_CELLPROFILER or put it on PATH)",
+    reason="CellProfiler not found (run scripts/setup_cellprofiler_env.sh)",
 )
 
 HEADER = """CellProfiler Pipeline: http://www.cellprofiler.org
@@ -220,3 +226,96 @@ def test_object_numbers_map_to_labels():
     table = _label_object_table(exported, "Cells", np.array([4, 9, 12]))
     assert table.columns.tolist() == ["label", "cell_AreaShape_Area"]
     assert table["label"].tolist() == [9, 4, 12]
+
+
+@needs_cellprofiler
+def test_default_pipeline_runs(tile, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    image, nuclei, cells = tile
+    # No pipeline and no command: the default pipeline, run by the CellProfiler found
+    df = extract_features(image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler")
+
+    assert df["label"].tolist() == LABELS
+    assert df["cell_AreaShape_Area"].tolist() == [np.sum(cells == lab) for lab in LABELS]
+    assert df["cell_Intensity_MeanIntensity_GFP"].is_monotonic_increasing
+    for column in (
+        "nucleus_AreaShape_Zernike_0_0",
+        "cytoplasm_Intensity_MeanIntensity_DAPI",
+        "cell_Texture_Contrast_GFP_3_00_256",
+        "cell_Correlation_Correlation_DAPI_GFP",
+        "nucleus_Neighbors_NumberOfNeighbors_Adjacent",
+        "cell_Neighbors_NumberOfNeighbors_Adjacent",
+    ):
+        assert column in df.columns
+    assert not list(tmp_path.glob("goudacell_cp_*"))
+
+    lean = extract_features(
+        image, nuclei, None, channel_names=["DAPI", "GFP"], method="cellprofiler",
+        include_texture=False, include_correlation=False, include_neighbors=False,
+    )
+    assert lean["label"].tolist() == LABELS
+    assert not [c for c in lean.columns if c.startswith(("cell_", "cytoplasm_"))]
+    assert not [c for c in lean.columns if "Texture" in c or "Correlation_" in c]
+
+
+def test_default_pipeline_modules():
+    full = default_pipeline(["DAPI", "GFP"])
+    assert "ModuleCount:11" in full
+    assert full.count("module_num:") == 11 and "module_num:11|" in full
+    assert "@" not in full
+    assert "Select objects to measure:Nuclei, Cells, Cytoplasm" in full
+    assert full.count("MeasureObjectNeighbors:") == 2
+
+    lean = default_pipeline(["DAPI"], objects=("Nuclei",), include_texture=False)
+    assert "ModuleCount:8" in lean
+    for module in ("MeasureTexture:", "MeasureColocalization:", "Cells"):
+        assert module not in lean
+    assert lean.count("MeasureObjectNeighbors:") == 1
+
+
+def _executable(path: Path, body: str = "") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.fixture
+def no_cellprofiler(tmp_path, monkeypatch):
+    """An environment with no CellProfiler anywhere find_cellprofiler looks."""
+    monkeypatch.delenv("GOUDACELL_CELLPROFILER", raising=False)
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "path"))
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "python"))
+    return tmp_path
+
+
+def test_find_cellprofiler_order(no_cellprofiler, monkeypatch):
+    root = no_cellprofiler
+    assert find_cellprofiler() is None
+
+    # A goudacell_cp env under an unrelated conda base, known only to conda env list
+    listed = _executable(root / "elsewhere/goudacell_cp/bin/cellprofiler")
+    envs = {"envs": [str(root / "elsewhere/other"), str(listed.parents[1])]}
+    _executable(root / "path/conda", f"echo '{json.dumps(envs)}'")
+    assert find_cellprofiler() == str(listed)
+
+    # The env under the conda base of this interpreter, then of CONDA_EXE
+    in_prefix_base = _executable(root / "prefix_base/envs/goudacell_cp/bin/cellprofiler")
+    monkeypatch.setattr(sys, "prefix", str(root / "prefix_base/envs/goudacell"))
+    assert find_cellprofiler() == str(in_prefix_base)
+    in_conda_base = _executable(root / "base/envs/goudacell_cp/bin/cellprofiler")
+    monkeypatch.setenv("CONDA_EXE", str(root / "base/bin/conda"))
+    assert find_cellprofiler() == str(in_conda_base)
+
+    # cellprofiler on PATH beats any conda env, GOUDACELL_CELLPROFILER beats PATH
+    on_path = _executable(root / "path/cellprofiler")
+    assert find_cellprofiler() == str(on_path)
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", "/opt/cp/bin/cellprofiler")
+    assert find_cellprofiler() == "/opt/cp/bin/cellprofiler"
+
+
+def test_missing_cellprofiler_names_setup_script(no_cellprofiler, tile):
+    image, nuclei, cells = tile
+    with pytest.raises(RuntimeError, match="setup_cellprofiler_env.sh"):
+        extract_features_cellprofiler(image, nuclei, cells)

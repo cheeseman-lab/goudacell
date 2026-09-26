@@ -1,0 +1,10 @@
+# CellProfiler for goudacell's `cellprofiler` backend, in its own env (Python 3.9, numpy<2)
+name: goudacell_cp
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.9
+  - cellprofiler=4.2.8.1
+  - uv
+  - pip

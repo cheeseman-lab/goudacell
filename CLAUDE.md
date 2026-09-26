@@ -20,8 +20,11 @@ goudacell/
 │   ├── gpu.py                  # GPU detection / diagnostics
 │   ├── notebook.py             # ipywidgets ParameterUI (notebook front-end)
 │   ├── viz.py                  # Visualization utilities
+│   ├── data/goudacell_default.cppipe # Default CellProfiler pipeline (template)
 │   └── brieflow/               # brieflow's phenotype lib, vendored verbatim (do not edit)
 ├── scripts/sync_brieflow.py    # Re-vendors src/goudacell/brieflow at a brieflow commit
+├── scripts/setup_cellprofiler_env.sh # Creates the goudacell_cp CellProfiler env
+├── envs/cellprofiler.yml       # goudacell_cp env spec (CellProfiler 4.2.8.1, Python 3.9)
 ├── data/                       # Put test images here
 ├── configs/                    # Generated configs (segmentation_config.yaml)
 ├── out/                        # Batch masks + feature tables
@@ -121,21 +124,23 @@ Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the ph
 label), runs `cellprofiler -c -r -p -i -o -t` in a non-hidden `goudacell_cp_*` folder in the
 cwd (CellProfiler's default Images filter skips dot-folders; `-t` keeps its temp files out
 of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` with
-`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. Working
-install (CellProfiler 4.2.8.1, Python 3.9, OpenJDK from conda-forge), in its own env since
-it needs numpy<2:
-
-```bash
-conda create -y --solver=libmamba -n cellprofiler -c conda-forge -c bioconda cellprofiler=4.2.8.1
-```
+`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. CellProfiler
+(4.2.8.1, Python 3.9, OpenJDK from conda-forge) lives in its own env since it needs numpy<2:
+`bash scripts/setup_cellprofiler_env.sh` creates `goudacell_cp` from `envs/cellprofiler.yml`
+(`--solver=libmamba`; the classic solver hangs on the cluster). `find_cellprofiler` resolves
+an unset `cellprofiler_cmd`: `GOUDACELL_CELLPROFILER` → `cellprofiler` on PATH → the
+`goudacell_cp` env's `bin/cellprofiler` (conda base from `CONDA_EXE`/`sys.prefix`, then
+`conda env list --json`), never activating anything. An unset `pipeline_file` runs
+`default_pipeline`, which fills `data/goudacell_default.cppipe` for the staged channels and
+masks and drops MeasureTexture / MeasureColocalization / MeasureObjectNeighbors per
+`include_texture` / `include_correlation` / `include_neighbors`.
 
 ## Running Tests
 
 Tests are local-only except the brieflow parity test (see above) and
-`tests/test_cellprofiler_backend.py` (skips without CellProfiler).
+`tests/test_cellprofiler_backend.py` (its CellProfiler runs skip when none is found).
 
 ```bash
 BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v
-GOUDACELL_CELLPROFILER=/path/to/envs/cellprofiler/bin/cellprofiler \
-    pytest tests/test_cellprofiler_backend.py -v
+pytest tests/test_cellprofiler_backend.py -v   # finds the goudacell_cp env by itself
 ```

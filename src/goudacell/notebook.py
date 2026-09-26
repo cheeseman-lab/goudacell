@@ -36,6 +36,12 @@ from goudacell.config import (
     SecondaryObjectParams,
     SegmentationConfig,
 )
+from goudacell.features_cellprofiler import (
+    CELLPROFILER_ENV,
+    DEFAULT_PIPELINE,
+    SETUP_SCRIPT,
+    find_cellprofiler,
+)
 
 COMPARTMENTS = ["nucleus", "cell", "cytoplasm"]
 METHODS = ["cp_emulator", "cp_measure", "cellprofiler"]
@@ -165,10 +171,13 @@ def _cellprofiler_problem(fe: Optional[FeatureExtractionParams]) -> Optional[str
     """Why a config's CellProfiler backend can't run here, or None."""
     if fe is None or not fe.enabled or fe.method != "cellprofiler":
         return None
-    if not fe.pipeline_file or not Path(fe.pipeline_file).is_file():
+    if fe.pipeline_file and not Path(fe.pipeline_file).is_file():
         return f"CellProfiler pipeline not found: {fe.pipeline_file!r}"
-    if shutil.which(fe.cellprofiler_cmd) is None:
-        return f"CellProfiler command not found: {fe.cellprofiler_cmd!r}"
+    cmd = fe.cellprofiler_cmd or find_cellprofiler()
+    if cmd is None:
+        return f"CellProfiler not found: create its '{CELLPROFILER_ENV}' env with {SETUP_SCRIPT}"
+    if shutil.which(cmd) is None:
+        return f"CellProfiler command not found: {cmd!r}"
     return None
 
 
@@ -450,14 +459,17 @@ class ParameterUI:
         self.feat_method_note = widgets.HTML(
             "<i><code>cp_measure</code> is listed once installed "
             "(<code>uv pip install -e '.[cp_measure]'</code>); "
-            "<code>cellprofiler</code> needs a CellProfiler env (its <code>bin/cellprofiler</code> "
-            "as the command) + a .cppipe pipeline (see the README).</i>"
+            "<code>cellprofiler</code> needs the <code>goudacell_cp</code> env "
+            "(<code>scripts/setup_cellprofiler_env.sh</code>), found by itself; leave the "
+            "pipeline blank for goudacell's default or give your own .cppipe (see the README).</i>"
         )
         self.feat_cp_pipeline = widgets.Text(
-            value="", placeholder="path/to/pipeline.cppipe", description="CP pipeline:"
+            value="", placeholder=f"default: {DEFAULT_PIPELINE.name}", description="CP pipeline:"
         )
         self.feat_cp_cmd = widgets.Text(
-            value=shutil.which("cellprofiler") or "cellprofiler", description="CP command:"
+            value=find_cellprofiler() or "",
+            placeholder=f"not found: run {SETUP_SCRIPT}",
+            description="CP command:",
         )
         self.feat_cp_box = widgets.HBox([self.feat_cp_pipeline, self.feat_cp_cmd])
         self.feat_channels = widgets.Text(
@@ -857,7 +869,7 @@ class ParameterUI:
             foci_channel=_parse_foci(self.feat_foci.value),
             custom_features=list(self.custom_feature_definitions) or None,
             pipeline_file=str(Path(pipeline).resolve()) if pipeline else None,
-            cellprofiler_cmd=self.feat_cp_cmd.value.strip() or "cellprofiler",
+            cellprofiler_cmd=self.feat_cp_cmd.value.strip() or None,
         )
 
     def build_second_obj_params(self) -> SecondaryObjectParams:
@@ -1469,7 +1481,7 @@ class ParameterUI:
             if fe.combine_tables:
                 detail += ", combined table"
             if fe.method == "cellprofiler":
-                detail += f", pipeline {fe.pipeline_file}"
+                detail += f", pipeline {fe.pipeline_file or DEFAULT_PIPELINE.name + ' (default)'}"
             lines.append(detail)
         else:
             lines.append("Features: off")

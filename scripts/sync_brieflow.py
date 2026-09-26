@@ -1,8 +1,9 @@
 """Vendor brieflow's phenotype modules into ``src/goudacell/brieflow/``.
 
-Each module is copied verbatim from a brieflow checkout at a given commit; the only change
-is rewriting ``lib.`` imports to ``goudacell.brieflow.``. The commit is recorded in
-``src/goudacell/brieflow/__init__.py``. Never edit the vendored files: re-run this script.
+Each module is copied verbatim from a brieflow checkout at a given commit, with brieflow's
+``LICENSE``; the only change is rewriting ``lib.`` imports to ``goudacell.brieflow.``. The
+commit is recorded in ``src/goudacell/brieflow/__init__.py``. Never edit the vendored files:
+re-run this script.
 
     python scripts/sync_brieflow.py --brieflow /path/to/brieflow [--ref <commit>] [--check]
 """
@@ -69,7 +70,8 @@ def vendored_sources(root: Path, ref: str = "HEAD") -> dict:
         ref: Commit to vendor.
 
     Returns:
-        ``{relative_path: text}`` for every module and the generated ``__init__.py`` files.
+        ``{relative_path: text}`` for every module, brieflow's ``LICENSE`` and the generated
+        ``__init__.py`` files.
     """
     commit = resolve_commit(root, ref)
     files = {
@@ -83,6 +85,8 @@ def vendored_sources(root: Path, ref: str = "HEAD") -> dict:
         missing = set(MODULE_IMPORT_RE.findall(text)) - vendored
         if missing:
             raise RuntimeError(f"{module} imports unvendored brieflow modules: {sorted(missing)}")
+
+    files["LICENSE"] = _git(root, "show", f"{commit}:LICENSE")
 
     listed = "".join(f'    "{m}",\n' for m in MODULES)
     files["__init__.py"] = INIT_TEMPLATE.format(commit=commit, modules=listed)

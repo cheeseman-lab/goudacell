@@ -156,3 +156,9 @@ Either version also accepts a path to a custom trained model in place of a model
 - TIFF (`.tif`, `.tiff`)
 - Nikon ND2 (`.nd2`)
 - DeltaVision (`.dv`)
+
+## License
+
+MIT; see [LICENSE](LICENSE). `src/goudacell/brieflow/` is vendored from
+[brieflow](https://github.com/cheeseman-lab/brieflow) (MIT) and keeps brieflow's own
+[LICENSE](src/goudacell/brieflow/LICENSE), which `scripts/sync_brieflow.py` copies with the modules.

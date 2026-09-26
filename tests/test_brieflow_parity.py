@@ -80,7 +80,11 @@ def _quiet(func, *args, **kwargs):
 def test_vendored_files_match_pinned_commit():
     sync = _sync_module()
     expected = sync.vendored_sources(ROOT, BRIEFLOW_COMMIT)
-    on_disk = {str(p.relative_to(sync.DEST)): p.read_text() for p in sync.DEST.rglob("*.py")}
+    on_disk = {
+        str(p.relative_to(sync.DEST)): p.read_text()
+        for p in sync.DEST.rglob("*")
+        if p.suffix == ".py" or p.name == "LICENSE"
+    }
     assert sorted(on_disk) == sorted(expected), "vendored file set differs; re-run the sync"
     stale = [path for path, text in expected.items() if on_disk[path] != text]
     assert not stale, f"vendored files differ from brieflow {BRIEFLOW_COMMIT[:7]}: {stale}"

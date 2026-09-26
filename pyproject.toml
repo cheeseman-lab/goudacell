@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.4.0"
 description = "HPC-compatible cell segmentation using Cellpose"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "src/goudacell/brieflow/LICENSE"]
 dependencies = [
     # Image I/O (tlambert03 packages)
     "nd2>=0.10.0",
@@ -72,6 +73,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+goudacell = ["brieflow/LICENSE"]
 
 [tool.ruff]
 line-length = 100

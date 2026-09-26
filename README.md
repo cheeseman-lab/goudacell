@@ -26,6 +26,8 @@ GoudaCell is a **single-shot tool** — run it once on your images to produce se
 - Classification — train models to distinguish cell states or drug responses
 - Correlation analysis — link morphological features to genetic perturbations
 
+**Upgrading from 0.3?** 0.4.0 runs brieflow's phenotype code, so masks and feature tables change for existing configs. See [CHANGELOG.md](CHANGELOG.md#upgrading-from-03).
+
 ## Getting Started
 
 ### 1. Set Up Your Environment (one time)

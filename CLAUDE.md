@@ -127,7 +127,9 @@ Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the ph
 label), runs `cellprofiler -c -r -p -i -o -t` in a non-hidden `goudacell_cp_*` folder in the
 cwd (CellProfiler's default Images filter skips dot-folders; `-t` keeps its temp files out
 of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` with
-`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. CellProfiler
+`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run, a run longer than
+`feature_extraction.cellprofiler_timeout` (default 3600 s, `null` = no limit), or no object
+table raises. CellProfiler
 (4.2.8.1, Python 3.9, OpenJDK from conda-forge) lives in its own env since it needs numpy<2:
 `bash scripts/setup_cellprofiler_env.sh` creates `goudacell_cp` from `envs/cellprofiler.yml`
 (`--solver=libmamba` when available; the classic solver can hang on it). `find_cellprofiler` resolves

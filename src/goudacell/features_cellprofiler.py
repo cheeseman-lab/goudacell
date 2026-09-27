@@ -255,7 +255,7 @@ def extract_features_cellprofiler(
     include_correlation: bool = True,
     include_neighbors: bool = True,
     cytoplasm_masks: Optional[np.ndarray] = None,
-    timeout: int = 600,
+    timeout: Optional[float] = 3600,
 ) -> pd.DataFrame:
     """Extract features by running CellProfiler headlessly via CLI.
 
@@ -285,7 +285,8 @@ def extract_features_cellprofiler(
         include_correlation: Keep the default pipeline's MeasureColocalization.
         include_neighbors: Keep the default pipeline's MeasureObjectNeighbors.
         cytoplasm_masks: Optional labeled cytoplasm mask (H, W).
-        timeout: Seconds before the CellProfiler run is killed.
+        timeout: Seconds before the CellProfiler run is killed (the config's
+            ``feature_extraction.cellprofiler_timeout``); None never kills it.
 
     Returns:
         DataFrame with a ``label`` column (the mask label) and the CellProfiler
@@ -294,7 +295,8 @@ def extract_features_cellprofiler(
     Raises:
         FileNotFoundError: If pipeline_file doesn't exist.
         RuntimeError: If the executable is not a supported CellProfiler
-            (:func:`check_cellprofiler`), CellProfiler fails, or it exports no object table.
+            (:func:`check_cellprofiler`), CellProfiler fails or times out, or it exports no
+            object table.
     """
     if pipeline_file is not None:
         pipeline_file = Path(pipeline_file).resolve()
@@ -357,7 +359,14 @@ def extract_features_cellprofiler(
             "-o", str(cp_output_dir.resolve()),
             "-t", str(cp_temp_dir.resolve()),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"CellProfiler did not finish within {timeout} s; raise "
+                "feature_extraction.cellprofiler_timeout in the config (or the timeout "
+                "argument; null/None for no limit)."
+            ) from None
         if result.returncode != 0:
             staged = sorted(f.name for f in input_dir.iterdir())
             raise RuntimeError(

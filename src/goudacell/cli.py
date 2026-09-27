@@ -44,6 +44,7 @@ def _extract_features_for(fe, image, nuclei_masks, cell_masks):
         method=fe.method,
         pipeline_file=fe.pipeline_file,
         cellprofiler_cmd=fe.cellprofiler_cmd,
+        cellprofiler_timeout=fe.cellprofiler_timeout,
         custom_features=load_custom_features(fe.custom_features),
     )
 

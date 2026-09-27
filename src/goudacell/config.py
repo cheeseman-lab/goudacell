@@ -35,6 +35,8 @@ class FeatureExtractionParams:
         custom_features: Custom feature definitions from brieflow's
             ``register_custom_features`` (cp_emulator only), as brieflow's
             ``custom_features`` config key.
+        cellprofiler_timeout: Seconds CellProfiler may run on one image before it is
+            killed (cellprofiler method only); None never kills it.
     """
 
     enabled: bool = False
@@ -51,6 +53,7 @@ class FeatureExtractionParams:
     # CellProfiler headless options (method="cellprofiler"); None = default pipeline / found CP
     pipeline_file: Optional[str] = None
     cellprofiler_cmd: Optional[str] = None
+    cellprofiler_timeout: Optional[int] = 3600
     foci_channel: Optional[Union[int, List[int]]] = None
     custom_features: Optional[List[dict]] = None
 
@@ -325,6 +328,7 @@ class SegmentationConfig:
             if fe.method == "cellprofiler":
                 fe_data["pipeline_file"] = fe.pipeline_file
                 fe_data["cellprofiler_cmd"] = fe.cellprofiler_cmd
+                fe_data["cellprofiler_timeout"] = fe.cellprofiler_timeout
             data["feature_extraction"] = fe_data
 
         with open(yaml_path, "w") as f:

@@ -222,7 +222,10 @@ own must follow the same layout:
 
 goudacell joins those three object tables on the mask `label`. The columns are
 `nucleus_`/`cell_`/`cytoplasm_` plus CellProfiler's names (e.g.
-`cell_Intensity_MeanIntensity_GFP`), with intensities scaled to 0–1. A pipeline that loads a
+`cell_Intensity_MeanIntensity_GFP`), with intensities scaled to 0–1. CellProfiler gets
+`cellprofiler_timeout` seconds per image (default 3600; `null` for no limit) before it is
+killed and the image fails with an error naming that setting; raise it for large tiles or
+heavy pipelines. A pipeline that loads a
 mask the mode doesn't produce (e.g. `Cells` in nuclei mode) finds no image set and fails
 with the list of staged files. `pytest tests/test_cellprofiler_backend.py` runs a minimal
 pipeline and the default one with the CellProfiler it finds, and skips those tests when it

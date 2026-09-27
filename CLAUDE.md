@@ -145,7 +145,8 @@ generation, and `goudacell segment` (before any segmentation) all go through it.
 
 `environment.check_environment()` runs at the top of `goudacell/__init__.py`, before the heavy
 imports (stdlib only, Python-3.9-safe), and raises if the interpreter is the `goudacell_cp`
-CellProfiler env, Python < 3.10, or numpy < 2; `ParameterUI` also requires Cellpose. The
+CellProfiler env (by name), Python < 3.10, or numpy < 2 (named as a CellProfiler env when
+`cellprofiler` is importable there; an importable CellProfiler alone is fine); `ParameterUI` also requires Cellpose. The
 notebook's first cell turns a missing `goudacell` (the CellProfiler kernel can't import it)
 into the same "switch the kernel to goudacell" error.
 

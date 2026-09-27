@@ -353,6 +353,52 @@ def test_check_cellprofiler(no_cellprofiler, fresh_checks, monkeypatch):
         check_cellprofiler()
 
 
+def test_legacy_default_command_falls_through_to_discovery(
+    no_cellprofiler, fresh_checks, monkeypatch, caplog
+):
+    root = no_cellprofiler
+    monkeypatch.setattr(features_cellprofiler, "_legacy_noted", False)
+    found = _executable(root / "env/cellprofiler", "echo 4.2.8.1")
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(found))
+    with caplog.at_level("WARNING", logger="goudacell.features_cellprofiler"):
+        assert check_cellprofiler("cellprofiler") == str(found)
+        assert check_cellprofiler("cellprofiler") == str(found)
+    assert sum("not on PATH" in r.message for r in caplog.records) == 1
+
+    # On PATH, and any explicit path, the configured command still wins
+    on_path = _executable(root / "path/cellprofiler", "echo 4.2.8.1")
+    assert check_cellprofiler("cellprofiler") == "cellprofiler"
+    assert check_cellprofiler(str(on_path)) == str(on_path)
+
+
+def test_timeout_names_the_setting(no_cellprofiler, fresh_checks, tile, monkeypatch):
+    from goudacell.config import FeatureExtractionParams, SegmentationConfig
+
+    root = no_cellprofiler
+    monkeypatch.chdir(root)
+    slow = _executable(
+        root / "slow/cellprofiler",
+        'if [ "$1" = --version ]; then echo 4.2.8.1; '
+        f'else {sys.executable} -c "import time; time.sleep(10)"; fi',
+    )
+    image, nuclei, cells = tile
+    with pytest.raises(RuntimeError, match="within 1 s.*feature_extraction.cellprofiler_timeout"):
+        extract_features(
+            image, nuclei, cells, method="cellprofiler", cellprofiler_cmd=str(slow),
+            cellprofiler_timeout=1,
+        )
+    assert not list(root.glob("goudacell_cp_*"))
+
+    # The config carries the setting, defaulting to an hour
+    fe = FeatureExtractionParams(enabled=True, method="cellprofiler")
+    assert fe.cellprofiler_timeout == 3600
+    fe.cellprofiler_timeout = None
+    SegmentationConfig("in", "out", feature_extraction=fe).to_yaml(root / "config.yaml")
+    loaded = SegmentationConfig.from_yaml(root / "config.yaml").feature_extraction
+    assert "cellprofiler_timeout: null" in (root / "config.yaml").read_text()
+    assert loaded.cellprofiler_timeout is None
+
+
 def test_cli_fails_before_segmenting(no_cellprofiler, fresh_checks, monkeypatch):
     from typer.testing import CliRunner
 

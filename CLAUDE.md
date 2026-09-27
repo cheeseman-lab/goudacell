@@ -4,7 +4,7 @@
 
 GoudaCell is an HPC-compatible cell segmentation toolkit using Cellpose. Produces segmentation masks and morphological/intensity features from microscopy images.
 
-Part of the **fry-python-tools** ecosystem — single-purpose GPU tools for the Whitehead HPC. See also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) (protein embeddings + structure prediction).
+One of the [Cheeseman lab](https://github.com/cheeseman-lab)'s single-purpose GPU tools for a Slurm HPC. See also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) (protein embeddings + structure prediction).
 
 ## Project Structure
 
@@ -28,8 +28,8 @@ goudacell/
 ├── envs/cellprofiler.yml       # goudacell_cp env spec (CellProfiler 4.2.8.1, Python 3.9)
 ├── data/                       # Put test images here
 ├── configs/                    # Generated configs (segmentation_config.yaml)
-├── out/                        # Batch masks + feature tables
-│   └── logs/                   # SLURM .out logs
+├── masks/, features/           # Batch masks + feature tables (per run name, notebook configs)
+├── out/logs/                   # SLURM .out logs
 ├── notebooks/                  # Interactive notebook (thin: ParameterUI)
 └── scripts/                    # SLURM submission scripts
 ```
@@ -91,15 +91,18 @@ config onto the calls brieflow-analysis's `marimo` phenotype notebook
 
 Differences kept on purpose (goudacell-only options; the defaults are brieflow's behaviour):
 `remove_edge_cells: false` calls `prepare_cellpose` + `segment_cellpose_rgb`/`_nuclei_rgb` with
-`remove_edges=False` (brieflow always clears edges); `reconcile: null` gives no cytoplasm where
-brieflow's `identify_cytoplasm_cellpose` raises; feature `channels`, `compartments` and the
-texture/correlation/neighbor toggles select brieflow's per-compartment channel lists or drop
-columns from brieflow's table (no compute saved); cells-only mode, sweeps and the CellProfiler
+`remove_edges=False` (brieflow always clears edges); `reconcile: null` (or any masks whose labels
+don't pair, `segment.masks_reconciled`) gives no cytoplasm, with a warning, where brieflow's
+`identify_cytoplasm_cellpose` raises or pairs unrelated objects; feature `channels` select brieflow's
+per-compartment channel lists; the texture/correlation toggles patch brieflow's feature tables
+so those groups are not computed (float images work without them); `compartments` and the
+neighbor toggle drop columns from brieflow's table; cells-only mode, sweeps and the CellProfiler
 backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but ignored with a
 warning: brieflow segments nuclei with `nuclei` (Cellpose 3) or `cpsam` (Cellpose 4).
 
 To re-pin: `git -C <brieflow> fetch origin && git -C <brieflow> checkout <commit>`, then
-`python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`,
+`python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`;
+`--check` defaults to the pinned `BRIEFLOW_COMMIT`,
 and fails if a vendored module imports an unvendored one at module level: add it to
 `MODULES`). Review
 `git diff src/goudacell/brieflow`, adapt the adapters if a signature or default changed (compare
@@ -126,13 +129,17 @@ Run it on a compute node (Cellpose on CPU). `GOUDACELL_PARITY_TILE` picks the ph
 label), runs `cellprofiler -c -r -p -i -o -t` in a non-hidden `goudacell_cp_*` folder in the
 cwd (CellProfiler's default Images filter skips dot-folders; `-t` keeps its temp files out
 of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` with
-`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run or no object table raises. CellProfiler
+`nucleus_`/`cell_`/`cytoplasm_` prefixes. A failed run, a run longer than
+`feature_extraction.cellprofiler_timeout` (default 3600 s, `null` = no limit), or no object
+table raises. CellProfiler
 (4.2.8.1, Python 3.9, OpenJDK from conda-forge) lives in its own env since it needs numpy<2:
 `bash scripts/setup_cellprofiler_env.sh` creates `goudacell_cp` from `envs/cellprofiler.yml`
 (`--solver=libmamba` when available; the classic solver can hang on it). `find_cellprofiler` resolves
 an unset `cellprofiler_cmd`: `GOUDACELL_CELLPROFILER` → `cellprofiler` on PATH → the
 `goudacell_cp` env's `bin/cellprofiler` (conda base from `CONDA_EXE`/`sys.prefix`, then
-`conda env list --json`), never activating anything. An unset `pipeline_file` runs
+`conda env list --json`), never activating anything. The bare `cellprofiler_cmd: cellprofiler` that 0.3 wrote into
+configs counts as unset (logged once) when no `cellprofiler` is on PATH; any other explicit
+command wins over discovery. An unset `pipeline_file` runs
 `default_pipeline`, which fills `data/goudacell_default.cppipe` for the staged channels and
 masks and drops MeasureTexture / MeasureColocalization / MeasureObjectNeighbors per
 `include_texture` / `include_correlation` / `include_neighbors`. `check_cellprofiler` runs
@@ -144,7 +151,8 @@ generation, and `goudacell segment` (before any segmentation) all go through it.
 
 `environment.check_environment()` runs at the top of `goudacell/__init__.py`, before the heavy
 imports (stdlib only, Python-3.9-safe), and raises if the interpreter is the `goudacell_cp`
-CellProfiler env, Python < 3.10, or numpy < 2; `ParameterUI` also requires Cellpose. The
+CellProfiler env (by name), Python < 3.10, or numpy < 2 (named as a CellProfiler env when
+`cellprofiler` is importable there; an importable CellProfiler alone is fine); `ParameterUI` also requires Cellpose. The
 notebook's first cell turns a missing `goudacell` (the CellProfiler kernel can't import it)
 into the same "switch the kernel to goudacell" error.
 

@@ -6,6 +6,9 @@ commit is recorded in ``src/goudacell/brieflow/__init__.py``. Never edit the ven
 re-run this script.
 
     python scripts/sync_brieflow.py --brieflow /path/to/brieflow [--ref <commit>] [--check]
+
+``--ref`` defaults to the checkout's ``HEAD`` when syncing, and to the pinned
+``BRIEFLOW_COMMIT`` with ``--check``, so a check doesn't depend on what is checked out.
 """
 
 import argparse
@@ -35,6 +38,7 @@ MODULES = (
     "shared/image_utils.py",
 )
 
+PIN_RE = re.compile(r'^BRIEFLOW_COMMIT = "([0-9a-f]+)"$', re.MULTILINE)
 IMPORT_RE = re.compile(r"^(\s*)(from|import) lib\.", re.MULTILINE)
 MODULE_IMPORT_RE = re.compile(r"^(?:from|import) goudacell\.brieflow\.([\w.]+)", re.MULTILINE)
 
@@ -60,6 +64,14 @@ def _git(root: Path, *args: str) -> str:
 def resolve_commit(root: Path, ref: str = "HEAD") -> str:
     """Full commit SHA of ``ref`` in the brieflow checkout at ``root``."""
     return _git(root, "rev-parse", f"{ref}^{{commit}}").strip()
+
+
+def pinned_commit() -> str:
+    """The ``BRIEFLOW_COMMIT`` recorded in the vendored ``__init__.py``."""
+    match = PIN_RE.search((DEST / "__init__.py").read_text())
+    if match is None:
+        raise RuntimeError(f"no BRIEFLOW_COMMIT in {DEST / '__init__.py'}")
+    return match.group(1)
 
 
 def vendored_sources(root: Path, ref: str = "HEAD") -> dict:
@@ -99,9 +111,13 @@ def main(argv=None) -> int:
     """Sync (or with ``--check``, verify) the vendored brieflow modules."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--brieflow", required=True, type=Path, help="brieflow git checkout")
-    parser.add_argument("--ref", default="HEAD", help="commit to vendor (default: HEAD)")
+    parser.add_argument(
+        "--ref", help="commit to vendor (default: HEAD; with --check, the pinned commit)"
+    )
     parser.add_argument("--check", action="store_true", help="only report differences")
     args = parser.parse_args(argv)
+    if args.ref is None:
+        args.ref = pinned_commit() if args.check else "HEAD"
 
     files = vendored_sources(args.brieflow.expanduser().resolve(), args.ref)
     stale = [

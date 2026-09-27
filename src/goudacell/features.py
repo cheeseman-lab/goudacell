@@ -47,6 +47,7 @@ def extract_features(
     pipeline_file: Optional[str] = None,
     cellprofiler_cmd: Optional[str] = None,
     custom_features: Optional[dict] = None,
+    cellprofiler_timeout: Optional[int] = 3600,
 ) -> pd.DataFrame:
     """Extract CellProfiler-style features from a segmented image.
 
@@ -88,6 +89,8 @@ def extract_features(
         custom_features: Per-compartment custom features as returned by brieflow's
             ``load_custom_features``, each measured on the full multichannel image
             (channel order of the input). cp_emulator only.
+        cellprofiler_timeout: Seconds CellProfiler may run on this image (cellprofiler
+            method only); None never kills it.
 
     Returns:
         DataFrame with one row per object; column prefixes indicate the compartment
@@ -127,7 +130,7 @@ def extract_features(
         from goudacell.features_cellprofiler import extract_features_cellprofiler
 
         # Stage every mask the pipeline may load; compartments only drop columns after
-        if cytoplasm_masks is None and cell_masks is not None and np.sum(cell_masks) > 0:
+        if "cytoplasm" not in wanted and cell_masks is not None and np.sum(cell_masks) > 0:
             cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks)
         df = extract_features_cellprofiler(
             image[selected],
@@ -140,6 +143,7 @@ def extract_features(
             include_texture=include_texture,
             include_correlation=include_correlation,
             include_neighbors=include_neighbors,
+            timeout=cellprofiler_timeout,
         )
         return _keep_compartments(df, compartments)
 

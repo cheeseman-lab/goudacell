@@ -44,6 +44,7 @@ def _extract_features_for(fe, image, nuclei_masks, cell_masks):
         method=fe.method,
         pipeline_file=fe.pipeline_file,
         cellprofiler_cmd=fe.cellprofiler_cmd,
+        cellprofiler_timeout=fe.cellprofiler_timeout,
         custom_features=load_custom_features(fe.custom_features),
     )
 
@@ -91,10 +92,8 @@ def segment(
     console.print(f"Mode: [cyan]{cfg.mode}[/cyan]")
 
     if cfg.mode == "dual" and cfg.dual:
-        console.print(
-            f"Nuclei: diameter=[cyan]{cfg.dual.nuclei_diameter}[/cyan], "
-            f"model=[cyan]{cfg.dual.nuclei_model}[/cyan]"
-        )
+        # dual.nuclei_model is ignored: brieflow picks the nuclei model (segment_nuclei_and_cells)
+        console.print(f"Nuclei: diameter=[cyan]{cfg.dual.nuclei_diameter}[/cyan]")
         console.print(
             f"Cells: diameter=[cyan]{cfg.dual.cell_diameter}[/cyan], "
             f"model=[cyan]{cfg.dual.cell_model}[/cyan]"

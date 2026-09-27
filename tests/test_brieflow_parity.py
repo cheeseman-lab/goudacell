@@ -90,6 +90,37 @@ def test_vendored_files_match_pinned_commit():
     assert not stale, f"vendored files differ from brieflow {BRIEFLOW_COMMIT[:7]}: {stale}"
 
 
+def test_check_defaults_to_the_pin(tmp_path):
+    """``--check`` compares against the pin even when the checkout's HEAD is elsewhere."""
+    sync = _sync_module()
+    bare = tmp_path / "brieflow.git"
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", "--shared", str(ROOT), str(bare)], check=True
+    )
+
+    def git(*args, **kwargs):
+        return subprocess.run(
+            ["git", "-C", str(bare), *args], capture_output=True, text=True, check=True,
+            env={**os.environ, "GIT_INDEX_FILE": str(tmp_path / "index"),
+                 "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+            **kwargs,
+        ).stdout.strip()
+
+    # A HEAD one commit past the pin that changes a vendored module
+    path = "workflow/lib/shared/log_filter.py"
+    text = git("show", f"{BRIEFLOW_COMMIT}:{path}") + "\n# changed after the pin\n"
+    git("read-tree", BRIEFLOW_COMMIT)
+    blob = git("hash-object", "-w", "--stdin", input=text)
+    git("update-index", "--cacheinfo", f"100644,{blob},{path}")
+    head = git("commit-tree", git("write-tree"), "-p", BRIEFLOW_COMMIT, "-m", "after pin")
+    git("update-ref", "HEAD", head)
+    assert sync.resolve_commit(bare) == head != BRIEFLOW_COMMIT
+
+    assert sync.main(["--brieflow", str(bare), "--check"]) == 0
+    assert sync.main(["--brieflow", str(bare), "--check", "--ref", "HEAD"]) == 1
+
+
 def test_only_imports_are_rewritten():
     sync = _sync_module()
     for module in sync.MODULES:

@@ -21,6 +21,31 @@ def test_cellprofiler_env_is_the_wrong_kernel(monkeypatch):
     assert WRONG_KERNEL in str(err.value)
 
 
+def _cellprofiler_importable(monkeypatch):
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args: (
+            object() if name == "cellprofiler" else real_find_spec(name, *args)
+        ),
+    )
+
+
+def test_cellprofiler_installed_in_a_goudacell_env_passes(monkeypatch):
+    _cellprofiler_importable(monkeypatch)
+    check_environment()
+
+
+def test_other_cellprofiler_env_is_the_wrong_kernel(monkeypatch):
+    _cellprofiler_importable(monkeypatch)
+    monkeypatch.setattr(sys, "prefix", "/conda/envs/my_cp")
+    monkeypatch.setattr(sys, "version_info", (3, 9, 19))
+    with pytest.raises(RuntimeError, match="switch the kernel to goudacell") as err:
+        check_environment()
+    assert "needs Python >= 3.10" in str(err.value)
+
+
 def test_old_python_or_numpy(monkeypatch):
     monkeypatch.setattr(sys, "version_info", (3, 9, 19))
     with pytest.raises(RuntimeError, match="needs Python >= 3.10"):

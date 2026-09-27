@@ -14,6 +14,7 @@ Requires: a CellProfiler install, usually the ``goudacell_cp`` conda env made by
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ import pandas as pd
 import tifffile
 
 from goudacell.environment import CELLPROFILER_ENV
+
+logger = logging.getLogger(__name__)
 
 # Pipeline object name -> (staged mask file stem, goudacell column prefix)
 STAGED_OBJECTS = {
@@ -91,6 +94,27 @@ def _locate_cellprofiler() -> Tuple[Optional[str], str]:
     return None, ""
 
 
+# The cellprofiler_cmd goudacell 0.3 wrote into every CellProfiler config
+LEGACY_DEFAULT_CMD = "cellprofiler"
+_legacy_noted = False
+
+
+def _unset_legacy_default(cellprofiler_cmd: Optional[str]) -> Optional[str]:
+    """Treat 0.3's bare ``cellprofiler`` default as unset when it isn't on PATH."""
+    global _legacy_noted
+    if cellprofiler_cmd != LEGACY_DEFAULT_CMD or shutil.which(LEGACY_DEFAULT_CMD):
+        return cellprofiler_cmd
+    if not _legacy_noted:
+        logger.warning(
+            "cellprofiler_cmd: %s (goudacell 0.3's default) is not on PATH; finding "
+            "CellProfiler instead (GOUDACELL_CELLPROFILER, then the '%s' conda env)",
+            LEGACY_DEFAULT_CMD,
+            CELLPROFILER_ENV,
+        )
+        _legacy_noted = True
+    return None
+
+
 # Command -> version of the CellProfilers that passed check_cellprofiler (failures rerun)
 _CHECKED_VERSIONS = {}
 
@@ -101,8 +125,8 @@ def check_cellprofiler(cellprofiler_cmd: Optional[str] = None) -> str:
     Runs ``<cmd> --version`` once per command; a passing command is cached.
 
     Args:
-        cellprofiler_cmd: CellProfiler executable. If None, found by
-            :func:`find_cellprofiler`.
+        cellprofiler_cmd: CellProfiler executable. If None, or the bare ``cellprofiler``
+            older configs carry while none is on PATH, found by :func:`find_cellprofiler`.
 
     Returns:
         The checked command.
@@ -111,6 +135,7 @@ def check_cellprofiler(cellprofiler_cmd: Optional[str] = None) -> str:
         RuntimeError: If no CellProfiler is found, the command doesn't exist, isn't
             CellProfiler, or isn't a supported version; the message says what to do.
     """
+    cellprofiler_cmd = _unset_legacy_default(cellprofiler_cmd)
     if cellprofiler_cmd in _CHECKED_VERSIONS:
         return cellprofiler_cmd
     located, source = _locate_cellprofiler()
@@ -230,7 +255,7 @@ def extract_features_cellprofiler(
     include_correlation: bool = True,
     include_neighbors: bool = True,
     cytoplasm_masks: Optional[np.ndarray] = None,
-    timeout: int = 600,
+    timeout: Optional[float] = 3600,
 ) -> pd.DataFrame:
     """Extract features by running CellProfiler headlessly via CLI.
 
@@ -260,7 +285,8 @@ def extract_features_cellprofiler(
         include_correlation: Keep the default pipeline's MeasureColocalization.
         include_neighbors: Keep the default pipeline's MeasureObjectNeighbors.
         cytoplasm_masks: Optional labeled cytoplasm mask (H, W).
-        timeout: Seconds before the CellProfiler run is killed.
+        timeout: Seconds before the CellProfiler run is killed (the config's
+            ``feature_extraction.cellprofiler_timeout``); None never kills it.
 
     Returns:
         DataFrame with a ``label`` column (the mask label) and the CellProfiler
@@ -269,7 +295,8 @@ def extract_features_cellprofiler(
     Raises:
         FileNotFoundError: If pipeline_file doesn't exist.
         RuntimeError: If the executable is not a supported CellProfiler
-            (:func:`check_cellprofiler`), CellProfiler fails, or it exports no object table.
+            (:func:`check_cellprofiler`), CellProfiler fails or times out, or it exports no
+            object table.
     """
     if pipeline_file is not None:
         pipeline_file = Path(pipeline_file).resolve()
@@ -332,7 +359,14 @@ def extract_features_cellprofiler(
             "-o", str(cp_output_dir.resolve()),
             "-t", str(cp_temp_dir.resolve()),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"CellProfiler did not finish within {timeout} s; raise "
+                "feature_extraction.cellprofiler_timeout in the config (or the timeout "
+                "argument; null/None for no limit)."
+            ) from None
         if result.returncode != 0:
             staged = sorted(f.name for f in input_dir.iterdir())
             raise RuntimeError(
@@ -406,7 +440,7 @@ def run_cellprofiler_batch(
     (output_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        cellprofiler_cmd or find_cellprofiler() or "cellprofiler",
+        _unset_legacy_default(cellprofiler_cmd) or find_cellprofiler() or "cellprofiler",
         "-c",  # headless
         "-r",  # run
         "-p", str(pipeline_file),

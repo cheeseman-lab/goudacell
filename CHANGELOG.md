@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.1
+
+- **Cytoplasm needs reconciled masks.** Cytoplasm (and its features, and the cytoplasm given
+  to secondary objects) is built only when every nucleus shares its label with the cell it
+  overlaps (`segment.masks_reconciled`); otherwise it is skipped with a warning. 0.4.0 only
+  compared label counts, so unreconciled masks with equal counts paired unrelated objects.
+- **Environment check**: an importable `cellprofiler` no longer blocks `import goudacell`.
+  The check refuses the `goudacell_cp` env by name and interpreters below goudacell's
+  Python/numpy requirements (naming the CellProfiler env when it is one).
+- **Configs from 0.3**: `cellprofiler_cmd: cellprofiler` counts as unset when no
+  `cellprofiler` is on PATH, so discovery finds the `goudacell_cp` env (logged once).
+  Explicit paths still win.
+- **CellProfiler timeout** is `feature_extraction.cellprofiler_timeout` (default 3600 s,
+  `null` for no limit; was a fixed 600 s). A timeout raises an error naming the setting.
+- **`sync_brieflow.py --check`** compares against the pinned `BRIEFLOW_COMMIT` by default,
+  not the checkout's HEAD (`--ref` still overrides).
+- **Docs and scripts**: the SLURM scripts no longer hard-code a partition (pass
+  `--partition` or set `SBATCH_PARTITION`) and activate conda through its shell hook
+  (`GOUDACELL_ENV` names the env); README and CLAUDE.md drop site-specific wording and
+  describe the notebook's `masks/<name>/` and `features/<name>/` layout; `goudacell segment`
+  no longer prints the ignored `dual.nuclei_model`.
+
 ## 0.4.0
 
 goudacell now runs brieflow's phenotype code, vendored unchanged from brieflow `zarr3` @

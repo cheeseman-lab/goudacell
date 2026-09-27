@@ -159,8 +159,8 @@ into the same "switch the kernel to goudacell" error.
 ## Running Tests
 
 Tests are local-only except the brieflow parity test (see above),
-`tests/test_cellprofiler_backend.py` (its CellProfiler runs skip when none is found) and
-`tests/test_environment.py`.
+`tests/test_cellprofiler_backend.py` (its CellProfiler runs skip when none is found),
+`tests/test_environment.py`, `tests/test_cli.py` and `tests/test_cytoplasm.py`.
 
 ```bash
 BRIEFLOW_LIB=/path/to/brieflow pytest tests/test_brieflow_parity.py -v

@@ -39,12 +39,13 @@ data/*
 *.dv
 *_mask.tif
 
-# Tests are kept local-only (not tracked), except the brieflow parity, CellProfiler, env and CLI tests
+# Tests are kept local-only (not tracked), except the brieflow parity, CellProfiler, env, CLI and cytoplasm tests
 tests/*
 !tests/test_brieflow_parity.py
 !tests/test_cellprofiler_backend.py
 !tests/test_environment.py
 !tests/test_cli.py
+!tests/test_cytoplasm.py
 
 # SLURM outputs
 *.out

@@ -1,6 +1,6 @@
 # GoudaCell
 
-Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
+Cell segmentation and feature extraction on a Slurm HPC cluster (or any GPU machine) using Cellpose.
 
 ## Features
 
@@ -11,7 +11,7 @@ Cell segmentation and feature extraction on the Whitehead HPC using Cellpose.
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
 - **Cellpose 3 & 4**: Supports both versions with automatic model selection
 
-GoudaCell is a **single-shot tool** — run it once on your images to produce segmentation masks and features, then use the outputs in your downstream analysis. Part of the [fry-python-tools](https://github.com/cheeseman-lab) ecosystem (see also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) for protein embeddings).
+GoudaCell is a **single-shot tool** — run it once on your images to produce segmentation masks and features, then use the outputs in your downstream analysis. One of the [Cheeseman lab](https://github.com/cheeseman-lab)'s single-purpose GPU tools (see also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) for protein embeddings).
 
 ### What to do with the outputs
 
@@ -33,7 +33,7 @@ GoudaCell is a **single-shot tool** — run it once on your images to produce se
 ### 1. Set Up Your Environment (one time)
 
 ```bash
-# Clone the repository on fry
+# Clone the repository on your cluster
 git clone https://github.com/cheeseman-lab/goudacell.git
 cd goudacell
 
@@ -44,7 +44,7 @@ conda activate goudacell
 # Install goudacell (choose ONE):
 uv pip install -e ".[cellpose3]"  # For most cells (rounded shapes)
 uv pip install -e ".[cellpose4]"  # For complex cell shapes
-# Both extras pin torch to the cu126 wheel to match the fry GPU driver (CUDA 12.6).
+# Both extras pin torch to the cu126 wheel (CUDA 12.6; needs NVIDIA driver >= 560).
 # Check the GPU is usable with: goudacell version  (or the notebook's GPU banner)
 
 # Register as a Jupyter kernel
@@ -56,11 +56,16 @@ python -m ipykernel install --user --name goudacell --display-name "goudacell"
 ```bash
 # Start Jupyter on a GPU node (run from goudacell directory)
 cd /path/to/goudacell
+export SBATCH_PARTITION=<gpu-partition>   # your cluster's GPU partition (sinfo -o "%P %G")
 sbatch scripts/jupyter_gpu.sh
 
 # Check the output file for the URL
-cat goudacell_jupyter-*.out
+cat out/logs/goudacell_jupyter-*.out
 ```
+
+The SLURM scripts request one GPU (`--gres=gpu:1`) but no partition: set it with
+`SBATCH_PARTITION` as above or `sbatch --partition=<gpu-partition> ...`. They activate the
+`goudacell` conda env; set `GOUDACELL_ENV` to use another env name.
 
 Open the notebook at `notebooks/segmentation.ipynb` and:
 1. Set your image directory and file pattern
@@ -87,8 +92,9 @@ Generated artifacts are kept out of the source tree:
 | Folder | Contents |
 |--------|----------|
 | `data/` | Your input images |
-| `configs/` | Configs written by the notebook (`segmentation_config.yaml`) |
-| `out/` | Masks + feature tables from batch runs |
+| `configs/` | Configs written by the notebook (`<name>.yaml`, next to your data folder) |
+| `masks/<name>/` | Masks from batch runs of the notebook's config `<name>` (next to your data folder) |
+| `features/<name>/` | Feature tables from those runs |
 | `out/logs/` | SLURM `.out` logs |
 
 Configs carry absolute input/output paths, so a config works no matter where it

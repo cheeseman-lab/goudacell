@@ -4,7 +4,7 @@
 
 GoudaCell is an HPC-compatible cell segmentation toolkit using Cellpose. Produces segmentation masks and morphological/intensity features from microscopy images.
 
-Part of the **fry-python-tools** ecosystem — single-purpose GPU tools for the Whitehead HPC. See also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) (protein embeddings + structure prediction).
+One of the [Cheeseman lab](https://github.com/cheeseman-lab)'s single-purpose GPU tools for a Slurm HPC. See also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) (protein embeddings + structure prediction).
 
 ## Project Structure
 
@@ -28,8 +28,8 @@ goudacell/
 ├── envs/cellprofiler.yml       # goudacell_cp env spec (CellProfiler 4.2.8.1, Python 3.9)
 ├── data/                       # Put test images here
 ├── configs/                    # Generated configs (segmentation_config.yaml)
-├── out/                        # Batch masks + feature tables
-│   └── logs/                   # SLURM .out logs
+├── masks/, features/           # Batch masks + feature tables (per run name, notebook configs)
+├── out/logs/                   # SLURM .out logs
 ├── notebooks/                  # Interactive notebook (thin: ParameterUI)
 └── scripts/                    # SLURM submission scripts
 ```
@@ -93,9 +93,10 @@ Differences kept on purpose (goudacell-only options; the defaults are brieflow's
 `remove_edge_cells: false` calls `prepare_cellpose` + `segment_cellpose_rgb`/`_nuclei_rgb` with
 `remove_edges=False` (brieflow always clears edges); `reconcile: null` (or any masks whose labels
 don't pair, `segment.masks_reconciled`) gives no cytoplasm, with a warning, where brieflow's
-`identify_cytoplasm_cellpose` raises or pairs unrelated objects; feature `channels`, `compartments` and the
-texture/correlation/neighbor toggles select brieflow's per-compartment channel lists or drop
-columns from brieflow's table (no compute saved); cells-only mode, sweeps and the CellProfiler
+`identify_cytoplasm_cellpose` raises or pairs unrelated objects; feature `channels` select brieflow's
+per-compartment channel lists; the texture/correlation toggles patch brieflow's feature tables
+so those groups are not computed (float images work without them); `compartments` and the
+neighbor toggle drop columns from brieflow's table; cells-only mode, sweeps and the CellProfiler
 backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but ignored with a
 warning: brieflow segments nuclei with `nuclei` (Cellpose 3) or `cpsam` (Cellpose 4).
 

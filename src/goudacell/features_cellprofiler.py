@@ -14,6 +14,7 @@ Requires: a CellProfiler install, usually the ``goudacell_cp`` conda env made by
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ import pandas as pd
 import tifffile
 
 from goudacell.environment import CELLPROFILER_ENV
+
+logger = logging.getLogger(__name__)
 
 # Pipeline object name -> (staged mask file stem, goudacell column prefix)
 STAGED_OBJECTS = {
@@ -91,6 +94,27 @@ def _locate_cellprofiler() -> Tuple[Optional[str], str]:
     return None, ""
 
 
+# The cellprofiler_cmd goudacell 0.3 wrote into every CellProfiler config
+LEGACY_DEFAULT_CMD = "cellprofiler"
+_legacy_noted = False
+
+
+def _unset_legacy_default(cellprofiler_cmd: Optional[str]) -> Optional[str]:
+    """Treat 0.3's bare ``cellprofiler`` default as unset when it isn't on PATH."""
+    global _legacy_noted
+    if cellprofiler_cmd != LEGACY_DEFAULT_CMD or shutil.which(LEGACY_DEFAULT_CMD):
+        return cellprofiler_cmd
+    if not _legacy_noted:
+        logger.warning(
+            "cellprofiler_cmd: %s (goudacell 0.3's default) is not on PATH; finding "
+            "CellProfiler instead (GOUDACELL_CELLPROFILER, then the '%s' conda env)",
+            LEGACY_DEFAULT_CMD,
+            CELLPROFILER_ENV,
+        )
+        _legacy_noted = True
+    return None
+
+
 # Command -> version of the CellProfilers that passed check_cellprofiler (failures rerun)
 _CHECKED_VERSIONS = {}
 
@@ -101,8 +125,8 @@ def check_cellprofiler(cellprofiler_cmd: Optional[str] = None) -> str:
     Runs ``<cmd> --version`` once per command; a passing command is cached.
 
     Args:
-        cellprofiler_cmd: CellProfiler executable. If None, found by
-            :func:`find_cellprofiler`.
+        cellprofiler_cmd: CellProfiler executable. If None, or the bare ``cellprofiler``
+            older configs carry while none is on PATH, found by :func:`find_cellprofiler`.
 
     Returns:
         The checked command.
@@ -111,6 +135,7 @@ def check_cellprofiler(cellprofiler_cmd: Optional[str] = None) -> str:
         RuntimeError: If no CellProfiler is found, the command doesn't exist, isn't
             CellProfiler, or isn't a supported version; the message says what to do.
     """
+    cellprofiler_cmd = _unset_legacy_default(cellprofiler_cmd)
     if cellprofiler_cmd in _CHECKED_VERSIONS:
         return cellprofiler_cmd
     located, source = _locate_cellprofiler()
@@ -406,7 +431,7 @@ def run_cellprofiler_batch(
     (output_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        cellprofiler_cmd or find_cellprofiler() or "cellprofiler",
+        _unset_legacy_default(cellprofiler_cmd) or find_cellprofiler() or "cellprofiler",
         "-c",  # headless
         "-r",  # run
         "-p", str(pipeline_file),

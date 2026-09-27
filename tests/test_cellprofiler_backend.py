@@ -353,6 +353,24 @@ def test_check_cellprofiler(no_cellprofiler, fresh_checks, monkeypatch):
         check_cellprofiler()
 
 
+def test_legacy_default_command_falls_through_to_discovery(
+    no_cellprofiler, fresh_checks, monkeypatch, caplog
+):
+    root = no_cellprofiler
+    monkeypatch.setattr(features_cellprofiler, "_legacy_noted", False)
+    found = _executable(root / "env/cellprofiler", "echo 4.2.8.1")
+    monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(found))
+    with caplog.at_level("WARNING", logger="goudacell.features_cellprofiler"):
+        assert check_cellprofiler("cellprofiler") == str(found)
+        assert check_cellprofiler("cellprofiler") == str(found)
+    assert sum("not on PATH" in r.message for r in caplog.records) == 1
+
+    # On PATH, and any explicit path, the configured command still wins
+    on_path = _executable(root / "path/cellprofiler", "echo 4.2.8.1")
+    assert check_cellprofiler("cellprofiler") == "cellprofiler"
+    assert check_cellprofiler(str(on_path)) == str(on_path)
+
+
 def test_cli_fails_before_segmenting(no_cellprofiler, fresh_checks, monkeypatch):
     from typer.testing import CliRunner
 

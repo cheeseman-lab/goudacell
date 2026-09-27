@@ -133,7 +133,9 @@ of /tmp), and joins the exported `Nuclei`/`Cells`/`Cytoplasm` CSVs on `label` wi
 (`--solver=libmamba` when available; the classic solver can hang on it). `find_cellprofiler` resolves
 an unset `cellprofiler_cmd`: `GOUDACELL_CELLPROFILER` → `cellprofiler` on PATH → the
 `goudacell_cp` env's `bin/cellprofiler` (conda base from `CONDA_EXE`/`sys.prefix`, then
-`conda env list --json`), never activating anything. An unset `pipeline_file` runs
+`conda env list --json`), never activating anything. The bare `cellprofiler_cmd: cellprofiler` that 0.3 wrote into
+configs counts as unset (logged once) when no `cellprofiler` is on PATH; any other explicit
+command wins over discovery. An unset `pipeline_file` runs
 `default_pipeline`, which fills `data/goudacell_default.cppipe` for the staged channels and
 masks and drops MeasureTexture / MeasureColocalization / MeasureObjectNeighbors per
 `include_texture` / `include_correlation` / `include_neighbors`. `check_cellprofiler` runs

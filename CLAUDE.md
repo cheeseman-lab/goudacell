@@ -100,7 +100,8 @@ backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but 
 warning: brieflow segments nuclei with `nuclei` (Cellpose 3) or `cpsam` (Cellpose 4).
 
 To re-pin: `git -C <brieflow> fetch origin && git -C <brieflow> checkout <commit>`, then
-`python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`,
+`python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`;
+`--check` defaults to the pinned `BRIEFLOW_COMMIT`,
 and fails if a vendored module imports an unvendored one at module level: add it to
 `MODULES`). Review
 `git diff src/goudacell/brieflow`, adapt the adapters if a signature or default changed (compare

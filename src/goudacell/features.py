@@ -127,7 +127,7 @@ def extract_features(
         from goudacell.features_cellprofiler import extract_features_cellprofiler
 
         # Stage every mask the pipeline may load; compartments only drop columns after
-        if cytoplasm_masks is None and cell_masks is not None and np.sum(cell_masks) > 0:
+        if "cytoplasm" not in wanted and cell_masks is not None and np.sum(cell_masks) > 0:
             cytoplasm_masks = identify_cytoplasm(nuclei_masks, cell_masks)
         df = extract_features_cellprofiler(
             image[selected],

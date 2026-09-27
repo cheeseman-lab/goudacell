@@ -91,8 +91,9 @@ config onto the calls brieflow-analysis's `marimo` phenotype notebook
 
 Differences kept on purpose (goudacell-only options; the defaults are brieflow's behaviour):
 `remove_edge_cells: false` calls `prepare_cellpose` + `segment_cellpose_rgb`/`_nuclei_rgb` with
-`remove_edges=False` (brieflow always clears edges); `reconcile: null` gives no cytoplasm where
-brieflow's `identify_cytoplasm_cellpose` raises; feature `channels`, `compartments` and the
+`remove_edges=False` (brieflow always clears edges); `reconcile: null` (or any masks whose labels
+don't pair, `segment.masks_reconciled`) gives no cytoplasm, with a warning, where brieflow's
+`identify_cytoplasm_cellpose` raises or pairs unrelated objects; feature `channels`, `compartments` and the
 texture/correlation/neighbor toggles select brieflow's per-compartment channel lists or drop
 columns from brieflow's table (no compute saved); cells-only mode, sweeps and the CellProfiler
 backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but ignored with a

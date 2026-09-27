@@ -330,12 +330,40 @@ def identify_cytoplasm(nuclei: np.ndarray, cells: np.ndarray) -> Optional[np.nda
         cells: Labeled cell mask.
 
     Returns:
-        Labeled cytoplasm mask, or None when the masks are not reconciled (goudacell's
-        ``reconcile: null``), where brieflow would raise.
+        Labeled cytoplasm mask, or None (with a warning) when the masks are not reconciled
+        (:func:`masks_reconciled`; e.g. goudacell's ``reconcile: null``), where brieflow
+        would raise or pair unrelated objects.
     """
-    if len(np.unique(nuclei)) != len(np.unique(cells)):
+    if not masks_reconciled(nuclei, cells):
+        n_nuclei, n_cells = len(np.unique(nuclei[nuclei > 0])), len(np.unique(cells[cells > 0]))
+        warnings.warn(
+            f"Skipping cytoplasm: the nuclei and cell masks are not reconciled ({n_nuclei} "
+            f"nuclei, {n_cells} cells, labels not paired). Cytoplasm needs reconciled masks; "
+            "set `reconcile` (e.g. 'contained_in_cells' or 'consensus') in the config.",
+            stacklevel=2,
+        )
         return None
     return identify_cytoplasm_cellpose(nuclei, cells)
+
+
+def masks_reconciled(nuclei: np.ndarray, cells: np.ndarray) -> bool:
+    """Whether nuclei and cells share labels as brieflow's ``reconcile_nuclei_cells`` leaves them.
+
+    Reconciled masks have the same label set, and each nucleus overlaps the cell of its own
+    label (brieflow pairs a nucleus with the cell under its centre pixel).
+
+    Args:
+        nuclei: Labeled nuclei mask.
+        cells: Labeled cell mask.
+
+    Returns:
+        True if every nucleus label is a cell label that it overlaps, and vice versa.
+    """
+    nuclei_labels = np.unique(nuclei[nuclei > 0])
+    if not np.array_equal(nuclei_labels, np.unique(cells[cells > 0])):
+        return False
+    paired = np.unique(nuclei[(nuclei > 0) & (nuclei == cells)])
+    return np.array_equal(paired, nuclei_labels)
 
 
 def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):

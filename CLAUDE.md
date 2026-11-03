@@ -48,7 +48,7 @@ uv pip install -e ".[cellpose3]"
 2. **Notebook generates configs**: No manual YAML editing needed
 3. **File Format Support**: ND2 (`nd2`), TIFF (`tifffile`), DV (`mrc`), OME-Zarr (`zarr`/`ome-zarr`)
 4. **Three extraction backends**: `cp_emulator` and `cp_measure` (brieflow's, vendored), `cellprofiler` (a user `.cppipe` run headless by a CellProfiler CLI in its own env)
-5. **Zarr v3 / OME-NGFF v0.5**: Follows brieflow zarr3 patterns with pyramid generation
+5. **Zarr v3 / OME-NGFF v0.5**: Follows brieflow's OME-Zarr patterns with pyramid generation
 
 ## CLI Commands
 
@@ -71,10 +71,10 @@ goudacell runs brieflow's phenotype code unchanged. `src/goudacell/brieflow/` ho
 `workflow/lib` modules (and brieflow's MIT `LICENSE`) copied verbatim by
 `scripts/sync_brieflow.py`, whose only change is
 rewriting `lib.` imports to `goudacell.brieflow.`; the pinned commit is `BRIEFLOW_COMMIT` in
-`src/goudacell/brieflow/__init__.py` (**brieflow `zarr3` @ `f03a2c8`**). Never edit the vendored
+`src/goudacell/brieflow/__init__.py` (**brieflow `v1.5.0` @ `e75f6b5`**). Never edit the vendored
 files: fix brieflow upstream, then re-sync. goudacell's own code is thin adapters that map its
-config onto the calls brieflow-analysis's `marimo` phenotype notebook
-(`analysis/3_phenotype.py`) makes, with that notebook's defaults in the UI.
+config onto the calls brieflow-analysis's phenotype notebook
+(`analysis/2_phenotype.py`) makes, with that notebook's defaults in the UI.
 
 | Phenotype notebook cell (brieflow call) | goudacell adapter |
 |---|---|

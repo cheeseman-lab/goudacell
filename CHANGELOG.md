@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+- **brieflow 1.5.0.** The vendored phenotype modules are re-synced to brieflow `v1.5.0` (e75f6b5), where
+  the `zarr3` line became brieflow `main`. Cytoplasm identification is vectorized (same masks),
+  Cellpose models are built once per process, and the segmentation functions print their QC block
+  only with `verbose=True`.
+
 ## 0.4.1
 
 - **Cytoplasm needs reconciled masks.** Cytoplasm (and its features, and the cytoplasm given

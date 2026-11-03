@@ -264,7 +264,7 @@ def save_image(
 
 
 # ---------------------------------------------------------------------------
-# OME-Zarr writing (adapted from brieflow zarr3 branch)
+# OME-Zarr writing (adapted from brieflow's image_io)
 # ---------------------------------------------------------------------------
 
 

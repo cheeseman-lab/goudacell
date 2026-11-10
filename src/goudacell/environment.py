@@ -15,6 +15,8 @@ MIN_PYTHON = (3, 10)
 MIN_NUMPY = 2
 # The conda env scripts/setup_cellprofiler_env.sh creates; goudacell only calls it as a subprocess
 CELLPROFILER_ENV = "goudacell_cp"
+# Cellpose 3.1.0 (cyto3, nuclei, ...) and Cellpose 4 (cpsam), both installed as in brieflow
+CELLPOSE_PACKAGES = ("cellpose3", "cellpose")
 WRONG_KERNEL = (
     "this notebook runs in the `goudacell` env; the CellProfiler env is only called as a "
     "subprocess — switch the kernel to goudacell"
@@ -55,8 +57,9 @@ def check_environment(require_cellpose: bool = False) -> None:
         raise RuntimeError(f"{WRONG_KERNEL} ({problem}; it has CellProfiler).")
     if problem:
         raise RuntimeError(f"{problem}; switch the kernel to (or activate) the goudacell env.")
-    if require_cellpose and importlib.util.find_spec("cellpose") is None:
+    missing = [p for p in CELLPOSE_PACKAGES if importlib.util.find_spec(p) is None]
+    if require_cellpose and missing:
         raise RuntimeError(
-            f"Cellpose is not installed: {where}. Switch to the goudacell env, or install it "
-            "there with uv pip install -e '.[cellpose3]' (or '.[cellpose4]')."
+            f"Cellpose is not installed ({', '.join(missing)} missing): {where}. Switch to the "
+            "goudacell env, or install it there with uv pip install -e '.[cellpose]'."
         )

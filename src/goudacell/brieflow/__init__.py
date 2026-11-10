@@ -1,6 +1,6 @@
 """Brieflow's phenotype code, vendored by scripts/sync_brieflow.py; do not edit."""
 
-BRIEFLOW_COMMIT = "e75f6b5f37f23037d1a12a562a95ff6bf68d5200"
+BRIEFLOW_COMMIT = "61457ae1e50392bdf70852f4a87544fea4474e88"
 BRIEFLOW_MODULES = (
     "shared/segment_cellpose.py",
     "shared/segmentation_utils.py",
@@ -17,4 +17,5 @@ BRIEFLOW_MODULES = (
     "shared/feature_utils.py",
     "shared/log_filter.py",
     "shared/image_utils.py",
+    "shared/file_utils.py",
 )

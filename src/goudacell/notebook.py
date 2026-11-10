@@ -122,31 +122,23 @@ def _parse_foci(text: str):
     return channels[0] if len(channels) == 1 else channels
 
 
-def _is_cellpose_4x() -> bool:
-    """Whether Cellpose 4.x is installed (False when Cellpose is missing)."""
-    try:
-        from goudacell.segment import get_cellpose_version
-
-        return get_cellpose_version()[0] >= 4
-    except ImportError:
-        return False
-
-
 def _has_size_model(model: str) -> bool:
-    """Whether Cellpose can estimate diameters for ``model`` (3.x, built-in, not cpsam)."""
-    from goudacell.segment import _is_custom_model
+    """Whether Cellpose can estimate diameters for ``model`` (built-in Cellpose 3 model)."""
+    from goudacell.brieflow.shared.segment_cellpose import CELLPOSE3_MODELS
 
-    return not _is_cellpose_4x() and model != "cpsam" and not _is_custom_model(model)
+    return model in CELLPOSE3_MODELS
 
 
 def _default_models() -> tuple:
-    """Pick (nuclei_model, cell_model) for the installed Cellpose version."""
-    return ("cpsam", "cpsam") if _is_cellpose_4x() else ("nuclei", "cyto3")
+    """Default (nuclei_model, cell_model), the phenotype notebook's Cellpose 3 models."""
+    return ("nuclei", "cyto3")
 
 
-def _model_options(cellpose_4x: bool) -> List[str]:
-    """Built-in model names for the installed Cellpose version (custom paths typed in)."""
-    return ["cpsam"] if cellpose_4x else ["cyto3", "cyto2", "cyto", "nuclei"]
+def _model_options() -> List[str]:
+    """Built-in model names of both Cellpose versions (custom paths typed in)."""
+    from goudacell.brieflow.shared.segment_cellpose import CELLPOSE3_MODELS, CELLPOSE4_MODELS
+
+    return [*CELLPOSE3_MODELS, *CELLPOSE4_MODELS]
 
 
 def _channel_options(n_channels: int, allow_none: bool = False) -> list:
@@ -224,7 +216,6 @@ class ParameterUI:
         self.file_pattern = file_pattern
         self.output_dir = output_dir
         self.config_dir = config_dir
-        self._cellpose_4x = _is_cellpose_4x()
         auto_nuc, auto_cell = (None, None)
         if nuclei_model is None or cell_model is None:
             auto_nuc, auto_cell = _default_models()
@@ -281,7 +272,7 @@ class ParameterUI:
         self.mode_w = widgets.ToggleButtons(
             options=["nuclei", "cells", "dual"], value="dual", description="Mode:"
         )
-        models = _model_options(self._cellpose_4x)
+        models = _model_options()
 
         self.nuc_channel = widgets.BoundedIntText(
             value=0, min=0, max=20, description="Nuclei channel:", style=label_style
@@ -376,7 +367,7 @@ class ParameterUI:
 
         self.estimate_btn = widgets.Button(
             description="Estimate diameters", icon="ruler",
-            tooltip="Size model (Cellpose 3.x); cpsam/custom: measured from a diameter-free run",
+            tooltip="Size model (Cellpose 3); cpsam/custom: measured from a diameter-free run",
         )
         self.run_btn = widgets.Button(
             description="Run preview", button_style="primary", icon="play"
@@ -612,7 +603,7 @@ class ParameterUI:
 
         # Cellpose
         self.so_cp_model = widgets.Combobox(
-            value=d.second_obj_cellpose_model, options=_model_options(self._cellpose_4x),
+            value=d.second_obj_cellpose_model, options=_model_options(),
             ensure_option=False, description="Model:", **text,
         )
         self.so_diameter = widgets.Text(
@@ -644,7 +635,7 @@ class ParameterUI:
         )
         self.so_stardist_box = widgets.VBox(
             [
-                widgets.HTML("<b>StarDist</b> <i>(needs the stardist package)</i>"),
+                widgets.HTML("<b>StarDist</b>"),
                 self.so_sd_model,
                 widgets.HBox([self.so_prob, self.so_nms]),
             ]
@@ -734,6 +725,7 @@ class ParameterUI:
     def _wire_events(self) -> None:
         """Connect widget callbacks."""
         self.mode_w.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.cell_model_w.observe(lambda _c: self._sync_nuclei_model_note(), names="value")
         self.refresh_btn.on_click(lambda _b: self._refresh_images())
         self.load_btn.on_click(self._on_load)
         self.estimate_btn.on_click(self._on_estimate)
@@ -825,8 +817,21 @@ class ParameterUI:
     # Logic (testable without a frontend)
     # ------------------------------------------------------------------
     def _dual_nuclei_model(self) -> str:
-        """The model brieflow segments nuclei with in dual mode (nuclei, or cpsam on 4.x)."""
-        return "cpsam" if self._cellpose_4x else "nuclei"
+        """The dual-mode nuclei model brieflow uses: cpsam next to cpsam cells, else nuclei."""
+        from goudacell.segment import brieflow_nuclei_model
+
+        cell_model_w = getattr(self, "cell_model_w", None)
+        cell_model = cell_model_w.value.strip() if cell_model_w else self._initial_models[1]
+        try:
+            return brieflow_nuclei_model(cell_model)
+        except (ValueError, OSError):
+            return "nuclei"
+
+    def _sync_nuclei_model_note(self) -> None:
+        """Name brieflow's dual-mode nuclei model for the chosen cell model."""
+        self.nuc_model_note.value = (
+            f"<i>Model: {self._dual_nuclei_model()} (brieflow's nuclei model in dual mode)</i>"
+        )
 
     @property
     def nuclei_model(self) -> str:
@@ -1081,8 +1086,8 @@ class ParameterUI:
     def _on_estimate(self, _btn) -> None:
         """Estimate diameters as brieflow's phenotype notebook and fill the sliders.
 
-        Built-in Cellpose 3.x models use brieflow's ``estimate_diameters`` (size model on
-        the prepared RGB image); cpsam, custom models and Cellpose 4.x segment once with
+        Built-in Cellpose 3 models use brieflow's ``estimate_diameters`` (size model on
+        the prepared RGB image); cpsam and custom models segment once with
         ``diameter=None`` and measure the mean object diameter.
         """
         from goudacell.gpu import resolve_gpu
@@ -1105,7 +1110,7 @@ class ParameterUI:
             if mode == "cells":
                 img = image[self.cell_channel.value] if image.ndim == 3 else image
                 if not _has_size_model(self.cell_model):
-                    print("Diameter estimation needs a built-in Cellpose 3.x model here.")
+                    print("Diameter estimation needs a built-in Cellpose 3 model here.")
                     return
                 self.cell_diameter.value = estimate_diameter(
                     img, model=self.cell_model, gpu=use_gpu

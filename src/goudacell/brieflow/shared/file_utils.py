@@ -1,0 +1,568 @@
+"""Utility functions for handling and filtering sample file paths in the BrieFlow pipeline."""
+
+import re
+from pathlib import Path
+from typing import Optional
+
+from pyarrow.parquet import ParquetFile
+import pyarrow as pa
+import pandas as pd
+import numpy as np
+
+# Mapping of metadata keys to filename prefixes and data types
+FILENAME_METADATA_MAPPING = {
+    "plate": ["P-", str],
+    "well": ["W-", str],
+    "row": ["Ro-", str],
+    "col": ["Co-", str],
+    "tile": ["T-", int],
+    "cycle": ["C-", int],
+    "round": ["R-", str],
+    "cell_class": ["CeCl-", str],
+    "channel_combo": ["ChCo-", str],
+    "compartment_combo": ["CmCo-", str],
+    "gene": ["G-", str],
+    "sgrna": ["SG-", str],
+    "channel": ["CH-", str],
+    "leiden_resolution": ["LR-", float],
+    "cluster_benchmark": ["CB-", str],
+}
+
+
+def get_filename(data_location: dict, info_type: str, file_type: str) -> str:
+    """Generate a structured filename based on data location, information type, and file type.
+
+    Produces flat filenames with metadata encoded as prefixes, e.g.:
+        P-plate1_W-A1_T-01__aligned.tiff
+
+    Args:
+        data_location (dict): Dictionary containing location info like well, tile, and cycle.
+        info_type (str): Type of information (e.g., 'cell_features', 'sbs_reads').
+        file_type (str): File extension/type (e.g., 'tsv', 'parquet', 'tiff').
+
+    Returns:
+        str: Structured filename.
+    """
+    parts = []
+
+    for metadata_key, metadata_value in data_location.items():
+        if metadata_key in FILENAME_METADATA_MAPPING:
+            prefix, _ = FILENAME_METADATA_MAPPING[metadata_key]
+            parts.append(f"{prefix}{metadata_value}")
+        else:
+            print(f"Unknown metadata key: {metadata_key}")
+
+    prefix = "_".join(parts)
+    filename = (
+        f"{prefix}__{info_type}.{file_type}" if prefix else f"{info_type}.{file_type}"
+    )
+
+    return filename
+
+
+def get_hcs_nested_path(
+    data_location: dict,
+    info_type: str,
+    file_type: str = "zarr",
+    subdirectory: Optional[str] = None,
+) -> str:
+    """Generate an HCS nested path with zarr.json sentinel tracking.
+
+    Image stores:  ``{info_type}_{plate}.zarr/{row}/{col}/{tile}/zarr.json``
+    Label stores:  ``aligned_{plate}.zarr/{row}/{col}/{tile}/{subdirectory}/{info_type}.zarr``
+
+    Args:
+        data_location: Dict with ``plate``, ``row``, ``col``, ``tile``
+            (and optionally ``cycle``) keys.
+        info_type: Image name (e.g. ``"aligned"``, ``"nuclei"``).
+        file_type: File extension (default ``"zarr"``).
+        subdirectory: If set (e.g. ``"labels"``), nests inside the aligned
+            image store instead of creating a standalone plate zarr.
+
+    Returns:
+        Relative path string.
+    """
+    plate = str(data_location["plate"])
+    row = str(data_location["row"])
+    col = str(data_location["col"])
+    tile = str(data_location["tile"])
+
+    if subdirectory:
+        # Label stores nest inside the aligned image store (OME-NGFF compliant).
+        # No .zarr suffix on sub-groups — they're already inside a .zarr store.
+        # e.g. aligned_1.zarr/A/1/0/labels/nuclei
+        parts = [f"aligned_{plate}.{file_type}", row, col, tile]
+        if "cycle" in data_location:
+            parts.append(str(data_location["cycle"]))
+        parts.extend([subdirectory, info_type])
+        return str(Path(*parts))
+
+    # Image stores: track by zarr.json sentinel so labels can nest inside without
+    # triggering Snakemake ChildIOException.
+    # e.g. aligned_1.zarr/A/1/0/zarr.json
+    parts = [f"{info_type}_{plate}.{file_type}", row, col, tile]
+    if "cycle" in data_location:
+        parts.append(str(data_location["cycle"]))
+    parts.append("zarr.json")
+    return str(Path(*parts))
+
+
+def get_nested_path(data_location: dict, info_type: str, file_type: str) -> str:
+    """Generate a nested directory path with metadata encoded as directory levels.
+
+    Produces nested paths like:
+        plate1/A1/01/aligned.tiff
+
+    The data_location keys become directory levels (in insertion order),
+    and the filename is simply ``{info_type}.{file_type}``.
+
+    Args:
+        data_location (dict): Dictionary containing location info like well, tile, and cycle.
+            Values become directory names in the order provided.
+        info_type (str): Type of information (e.g., 'aligned', 'nuclei').
+        file_type (str): File extension/type (e.g., 'tsv', 'parquet', 'tiff', 'zarr').
+
+    Returns:
+        str: Nested path string, e.g. ``plate1/A1/01/aligned.tiff``.
+    """
+    dir_parts = [str(v) for v in data_location.values()]
+    return str(Path(*dir_parts, f"{info_type}.{file_type}"))
+
+
+def parse_nested_path(file_path: str, location_keys: list) -> tuple:
+    """Parse a nested directory path to extract metadata, info_type, and file_type.
+
+    For a path like ``/output/sbs/images/plate1/A1/01/aligned.tiff``
+    with ``location_keys=["plate", "well", "tile"]``, returns::
+
+        ({"plate": "plate1", "well": "A1", "tile": 1}, "aligned", "tiff")
+
+    The last ``len(location_keys)`` directory components above the file are
+    mapped to the provided keys, and their values are cast using the data type
+    defined in ``FILENAME_METADATA_MAPPING``.
+
+    Args:
+        file_path (str): Full or relative file path with nested directory structure.
+        location_keys (list of str): Metadata keys corresponding to the directory
+            levels directly above the file, from outermost to innermost.
+            Must be keys present in ``FILENAME_METADATA_MAPPING``.
+
+    Returns:
+        tuple: A tuple containing:
+            - metadata (dict): Extracted metadata with typed values.
+            - info_type (str): The stem of the filename (e.g., 'aligned').
+            - file_type (str): The file extension without dot (e.g., 'tiff').
+    """
+    path = Path(file_path)
+    file_type = path.suffix.lstrip(".")
+    info_type = path.stem
+
+    dir_parts = list(path.parent.parts)
+    n_keys = len(location_keys)
+
+    if len(dir_parts) < n_keys:
+        raise ValueError(
+            f"Path '{file_path}' has {len(dir_parts)} directory levels but "
+            f"{n_keys} location keys were provided: {location_keys}"
+        )
+
+    metadata = {}
+    for i, key in enumerate(location_keys):
+        raw_value = dir_parts[-(n_keys - i)]
+        _, data_type = FILENAME_METADATA_MAPPING[key]
+        metadata[key] = data_type(raw_value)
+
+    return metadata, info_type, file_type
+
+
+def parse_filename(file_path: str) -> tuple:
+    """Parse a structured filename from a file path to extract data location, information type, and file type.
+
+    Args:
+        file_path (str): Full file path or filename, e.g., '/path/to/W_A1_T02_C03__cell_features.tsv'.
+
+    Returns:
+        tuple: A tuple containing:
+            - metadata (dict): Dictionary with keys like 'well', 'tile', 'cycle' as applicable.
+            - info_type (str): The type of information (e.g., 'cell_features').
+            - file_type (str): The file extension/type (e.g., 'tsv').
+    """
+    # Convert the input to a Path object
+    path = Path(file_path)
+
+    # Extract the filename and file extension
+    filename = path.stem
+    file_type = path.suffix.lstrip(".")
+
+    # Split the filename into main parts
+    parts = filename.split("__")
+
+    # Initialize metadata dictionary and info_type variable
+    metadata = {}
+    info_type = None
+
+    # Parse data location part
+    if len(parts) == 2:
+        location_part, info_type = parts
+        elements = location_part.split("_")
+
+        for element in elements:
+            for key, (prefix, data_type) in FILENAME_METADATA_MAPPING.items():
+                if element.startswith(prefix):
+                    # Extract and convert the value based on the data type
+                    value = element[len(prefix) :]
+                    metadata[key] = data_type(value)
+                    break  # Stop checking other prefixes for this element
+    else:
+        # If no location part, the first part is the info_type
+        info_type = parts[0]
+
+    return metadata, info_type, file_type
+
+
+def load_parquet_subset(full_df_fp, n_rows=50000, seed=42):
+    """Load a random subset of rows from a parquet file without loading entire file into memory.
+
+    Args:
+        full_df_fp (str): Path to parquet file.
+        n_rows (int): Number of rows to get.
+        seed (int): Random seed for reproducibility.
+
+    Returns:
+        pd.DataFrame: Random subset of the data.
+    """
+    pf = ParquetFile(full_df_fp)
+    total_rows = pf.metadata.num_rows
+    n_rows = min(n_rows, total_rows)
+
+    # Pick random row indices across the entire file
+    rng = np.random.default_rng(seed)
+    indices = np.sort(rng.choice(total_rows, size=n_rows, replace=False))
+
+    print(f"Reading {n_rows:,} random rows from {full_df_fp} ({total_rows:,} total)")
+
+    # Build row group offset table
+    row_group_offsets = []
+    offset = 0
+    for i in range(pf.metadata.num_row_groups):
+        rg_rows = pf.metadata.row_group(i).num_rows
+        row_group_offsets.append((offset, offset + rg_rows))
+        offset += rg_rows
+
+    # Find which row groups contain selected indices (read only those)
+    needed_groups = set()
+    for idx in indices:
+        for g, (start, end) in enumerate(row_group_offsets):
+            if start <= idx < end:
+                needed_groups.add(g)
+                break
+
+    sorted_groups = sorted(needed_groups)
+    table = pf.read_row_groups(sorted_groups)
+
+    # Remap global indices to local indices within the loaded subset
+    loaded_offsets = []
+    local_offset = 0
+    for g in sorted_groups:
+        start, end = row_group_offsets[g]
+        loaded_offsets.append((start, local_offset, end - start))
+        local_offset += end - start
+
+    local_indices = []
+    for idx in indices:
+        for global_start, local_start, length in loaded_offsets:
+            if global_start <= idx < global_start + length:
+                local_indices.append(local_start + (idx - global_start))
+                break
+
+    return table.take(pa.array(local_indices)).to_pandas()
+
+
+def validate_dtypes(df):
+    """Convert DataFrame columns to the most specific data type possible with the following rules.
+
+    - Convert object to bool or string if possible
+    - Convert strings to int float if possible
+    - Convert floats to int if possible
+
+    Args:
+        df : pandas.DataFrame
+            The DataFrame to optimize
+
+    Returns:
+        pandas.DataFrame
+            A new DataFrame with optimized dtypes
+    """
+    for col in df.columns:
+        # Skip columns that are already int
+        if pd.api.types.is_integer_dtype(df[col]):
+            continue
+
+        # Convert object to bool if possible, else to string
+        if pd.api.types.is_object_dtype(df[col]):
+            lowered = df[col].dropna().astype(str).str.lower()
+            if lowered.isin(["true", "false"]).all():
+                df[col] = (
+                    df[col].astype(str).str.lower().map({"true": True, "false": False})
+                )
+            else:
+                try:
+                    df[col] = df[col].astype("string")
+                except ValueError:
+                    pass
+
+        # Convert string to float if possible
+        if pd.api.types.is_string_dtype(df[col]):
+            try:
+                df[col] = df[col].astype(float)
+            except ValueError:
+                pass
+
+        # Convert float to int if possible
+        if pd.api.types.is_float_dtype(df[col]):
+            col_nonan = df[col].dropna()
+            if len(col_nonan) == 0 or np.allclose(
+                col_nonan, col_nonan.round(), rtol=1e-10, atol=1e-10
+            ):
+                try:
+                    df[col] = df[col].astype("Int64")
+                except TypeError:
+                    pass
+
+    return df
+
+
+def files_to_tile_mapping(file_paths):
+    """Convert list of file paths to tile_id -> file_path mapping.
+
+    Args:
+        file_paths (list): List of file paths with tile information in filename
+
+    Returns:
+        dict: Mapping from tile_id to file_path
+    """
+    tile_mapping = {}
+    for file_path in file_paths:
+        metadata, _, _ = parse_filename(file_path)
+        if "tile" in metadata:
+            tile_mapping[metadata["tile"]] = str(file_path)
+    return tile_mapping
+
+
+def _well_to_rowcol(location):
+    """Convert a ``{well}`` key to separate ``{row}``/``{col}`` keys for zarr HCS nesting.
+
+    Other keys are passed through unchanged.
+
+    Args:
+        location (dict): Data location dict, e.g.
+            ``{"plate": "{plate}", "well": "{well}", "tile": "{tile}"}``.
+
+    Returns:
+        dict: New dict with ``well`` replaced by ``row`` and ``col``.
+    """
+    result = {}
+    for k, v in location.items():
+        if k == "well":
+            result["row"] = "{row}"
+            result["col"] = "{col}"
+        else:
+            result[k] = v
+    return result
+
+
+def get_image_output_path(
+    data_location,
+    info_type,
+    img_fmt="tiff",
+    subdirectory=None,
+    image_subdir=None,
+):
+    """Get image output path for either TIFF or zarr format.
+
+    TIFF: ``images/[image_subdir/]P-1_W-A1_T-0__aligned.tiff``
+    zarr: ``[image_subdir/]aligned.zarr/A/1/0``
+
+    Args:
+        data_location (dict): Location dict with plate/well/tile keys.
+        info_type (str): Image name (e.g. 'aligned', 'nuclei').
+        img_fmt (str): ``"tiff"`` or ``"zarr"``.
+        subdirectory (str): Optional sub-level (e.g. ``"labels"``).
+        image_subdir (str): Optional category prefix (e.g. ``"sbs"``,
+            ``"phenotype"``).  For TIFF this goes under ``images/``;
+            for zarr it becomes the top-level directory.
+
+    Returns:
+        str: Relative path string.
+    """
+    if img_fmt == "zarr":
+        rowcol_loc = _well_to_rowcol(data_location)
+        inner = get_hcs_nested_path(rowcol_loc, info_type, subdirectory=subdirectory)
+        if image_subdir:
+            return str(Path(image_subdir) / inner)
+        return inner
+    prefix = Path("images")
+    if image_subdir:
+        prefix = prefix / image_subdir
+    return str(prefix / get_filename(data_location, info_type, img_fmt))
+
+
+def get_data_output_path(data_location, info_type, file_type, img_fmt="tiff"):
+    """Get non-image output path (tsvs, parquets, eval) for either format.
+
+    TIFF: ``P-1_W-A1_T-0__bases.tsv``  (flat filename)
+    zarr: ``1/A/1/0/bases.tsv``         (nested directories)
+
+    Args:
+        data_location (dict): Location dict with plate/well/tile keys.
+        info_type (str): Data name (e.g. 'bases', 'reads').
+        file_type (str): File extension (e.g. 'tsv', 'parquet').
+        img_fmt (str): ``"tiff"`` or ``"zarr"``.
+
+    Returns:
+        str: Relative path string.
+    """
+    if img_fmt == "zarr":
+        rowcol_loc = _well_to_rowcol(data_location)
+        return get_nested_path(rowcol_loc, info_type, file_type)
+    return get_filename(data_location, info_type, file_type)
+
+
+# Canonical well->(row,col) patterns; extend here (one source of truth), not at call sites.
+WELL_ROWCOL_PATTERNS = (
+    re.compile(r"^([A-Za-z]+)(\d+)$"),
+    re.compile(r"^([Rr]\d+)([Cc]\d+)$"),
+)
+
+
+def split_well(well):
+    """Split a well id into its ``(row, col)`` HCS-path components.
+
+    Canonical scalar derivation shared with the vectorized :func:`split_well_to_cols`
+    via ``WELL_ROWCOL_PATTERNS`` (alphanumeric ``"A1"`` -> ``("A", "1")``, Opera Phenix
+    ``"r02c05"`` -> ``("r02", "c05")``, prefixes kept so ``str(row)+str(col)`` round-trips).
+    Raises ``ValueError`` on an unrecognized convention rather than mis-splitting — the
+    naive ``well[0], well[1:]`` turned ``"r02c05"`` into ``("r", "02c05")`` and 404'd
+    every HCS-nested path.
+
+    Args:
+        well: Well identifier (e.g. ``"A1"``, ``"r02c05"``).
+
+    Returns:
+        tuple[str, str]: ``(row, col)``.
+
+    Raises:
+        ValueError: If ``well`` matches no known convention.
+    """
+    s = str(well)
+    for pattern in WELL_ROWCOL_PATTERNS:
+        m = pattern.match(s)
+        if m:
+            return m.group(1), m.group(2)
+    raise ValueError(
+        f"Cannot split well '{well}' into (row, col): matches no known convention "
+        f"(alphanumeric 'A1' or Opera Phenix 'r02c05'). Extend WELL_ROWCOL_PATTERNS."
+    )
+
+
+def split_well_to_cols(df):
+    """Add ``row`` and ``col`` columns derived from ``well`` (vectorized).
+
+    Vectorized twin of :func:`split_well`, sharing ``WELL_ROWCOL_PATTERNS`` so the two
+    derivations cannot drift. E.g. ``"A1"`` -> ``row="A"``, ``col="1"``; ``"r02c05"`` ->
+    ``row="r02"``, ``col="c05"``.
+
+    Args:
+        df (pd.DataFrame): DataFrame with a ``well`` column.
+
+    Returns:
+        pd.DataFrame: Copy with ``row`` and ``col`` columns added.
+    """
+    if len(df) > 0 and "well" in df.columns:
+        df = df.copy()
+        w = df["well"].astype(str)
+        alpha_re, phenix_re = WELL_ROWCOL_PATTERNS
+        splits = w.str.extract(alpha_re.pattern)
+        phenix = w.str.extract(phenix_re.pattern)
+        df["row"] = splits[0].fillna(phenix[0]).values
+        df["col"] = splits[1].fillna(phenix[1]).values
+    return df
+
+
+def get_well_from_wildcards(wildcards):
+    """Get well identifier from wildcards.
+
+    Handles ``{well}`` (TIFF) and ``{row}/{col}`` (zarr) modes, and returns None
+    when neither is present (a coarse metadata job scoped by plate/cycle, not well).
+
+    Args:
+        wildcards: Snakemake wildcards object.
+
+    Returns:
+        str | None: Well string (e.g. ``"A1"``), or None when the job carries no well.
+    """
+    if hasattr(wildcards, "well"):
+        return str(wildcards.well)
+    if hasattr(wildcards, "row") and hasattr(wildcards, "col"):
+        return str(wildcards.row) + str(wildcards.col)
+    return None
+
+
+def add_wildcard_columns(df, wildcards):
+    """Attach wildcard values as columns, casting digit-only values to int.
+
+    Snakemake passes wildcards as strings. ``pd.read_csv`` used to re-infer
+    plate/tile/cycle as int64 on read; parquet keeps the string, which breaks merges
+    against the int64 metadata tables.
+
+    Args:
+        df (pandas.DataFrame): Frame to annotate, modified in place.
+        wildcards (dict): Wildcard values from Snakemake.
+
+    Returns:
+        pandas.DataFrame: The same frame, for chaining.
+    """
+    for k, v in sorted(wildcards.items()):
+        df[k] = int(v) if isinstance(v, str) and v.isdigit() else v
+    return df
+
+
+def validate_data_type(data_type):
+    """Validate data type parameter.
+
+    Args:
+        data_type (str): Data type to validate
+
+    Returns:
+        str: Validated data type
+
+    Raises:
+        ValueError: If data type is not valid
+    """
+    valid_types = ["phenotype", "sbs"]
+    if data_type not in valid_types:
+        raise ValueError(f"data_type must be one of {valid_types}, got '{data_type}'")
+    return data_type
+
+
+def read_tsv_safe(filepath, return_empty_on_error=True):
+    """Read a TSV file safely with error handling.
+
+    Args:
+        filepath (str or Path): Path to the TSV file to read.
+        return_empty_on_error (bool, optional): If True, return empty DataFrame on
+            EmptyDataError. If False, return None on EmptyDataError. Default: True.
+
+    Returns:
+        pd.DataFrame or None: DataFrame if file read successfully or is empty (when
+            return_empty_on_error=True). None if file is empty and
+            return_empty_on_error=False.
+
+    Examples:
+        >>> df = read_tsv_safe('data.tsv')
+        >>> df = read_tsv_safe('data.tsv', return_empty_on_error=False)
+    """
+    try:
+        return pd.read_csv(filepath, sep="\t")
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame() if return_empty_on_error else None

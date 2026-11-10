@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.3
+
+- **brieflow 1.5.1.** The vendored phenotype modules are re-synced to brieflow `v1.5.1` (61457ae).
+  brieflow now installs Cellpose 3.1.0 (as `cellpose3`; cyto3, cyto2, cyto, nuclei) next to
+  Cellpose 4 (`cellpose`; cpsam) and picks the version from the model name, so goudacell does
+  too: one `.[cellpose]` extra replaces `.[cellpose3]`/`.[cellpose4]`, the notebook offers
+  every model, dual mode segments nuclei with `cpsam` next to `cpsam` cells (else `nuclei`),
+  and `estimate_diameter` uses the Cellpose 3.1.0 size model. `get_cellpose_version(model)`
+  reports the package that runs `model`.
+- **New dependencies**: `pyarrow` (brieflow's `file_utils`, now vendored) and StarDist with a
+  CPU TensorFlow, pinned as brieflow pins them, for StarDist secondary objects.
+
 ## 0.4.2
 
 - **brieflow 1.5.0.** The vendored phenotype modules are re-synced to brieflow `v1.5.0` (e75f6b5), where

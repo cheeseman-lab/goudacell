@@ -36,6 +36,7 @@ MODULES = (
     "shared/feature_utils.py",
     "shared/log_filter.py",
     "shared/image_utils.py",
+    "shared/file_utils.py",
 )
 
 PIN_RE = re.compile(r'^BRIEFLOW_COMMIT = "([0-9a-f]+)"$', re.MULTILINE)

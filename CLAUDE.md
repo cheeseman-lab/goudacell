@@ -39,12 +39,12 @@ goudacell/
 ```bash
 conda create -n goudacell -c conda-forge python=3.11 uv pip -y
 conda activate goudacell
-uv pip install -e ".[cellpose3]"
+uv pip install -e ".[cellpose]"   # Cellpose 4 (cpsam) + Cellpose 3.1.0 as cellpose3
 ```
 
 ## Key Design Decisions
 
-1. **Cellpose Version Detection**: Auto-detects version and validates model compatibility
+1. **Cellpose version from the model name**: both Cellpose 3.1.0 (`cellpose3`) and Cellpose 4 (`cellpose`) are installed, as in brieflow; brieflow's `create_cellpose_model` imports the one that runs the model
 2. **Notebook generates configs**: No manual YAML editing needed
 3. **File Format Support**: ND2 (`nd2`), TIFF (`tifffile`), DV (`mrc`), OME-Zarr (`zarr`/`ome-zarr`)
 4. **Three extraction backends**: `cp_emulator` and `cp_measure` (brieflow's, vendored), `cellprofiler` (a user `.cppipe` run headless by a CellProfiler CLI in its own env)
@@ -71,7 +71,7 @@ goudacell runs brieflow's phenotype code unchanged. `src/goudacell/brieflow/` ho
 `workflow/lib` modules (and brieflow's MIT `LICENSE`) copied verbatim by
 `scripts/sync_brieflow.py`, whose only change is
 rewriting `lib.` imports to `goudacell.brieflow.`; the pinned commit is `BRIEFLOW_COMMIT` in
-`src/goudacell/brieflow/__init__.py` (**brieflow `v1.5.0` @ `e75f6b5`**). Never edit the vendored
+`src/goudacell/brieflow/__init__.py` (**brieflow `v1.5.1` @ `61457ae`**). Never edit the vendored
 files: fix brieflow upstream, then re-sync. goudacell's own code is thin adapters that map its
 config onto the calls brieflow-analysis's phenotype notebook
 (`analysis/2_phenotype.py`) makes, with that notebook's defaults in the UI.
@@ -98,7 +98,7 @@ per-compartment channel lists; the texture/correlation toggles patch brieflow's 
 so those groups are not computed (float images work without them); `compartments` and the
 neighbor toggle drop columns from brieflow's table; cells-only mode, sweeps and the CellProfiler
 backend have no brieflow counterpart. `dual.nuclei_model` is still accepted but ignored with a
-warning: brieflow segments nuclei with `nuclei` (Cellpose 3) or `cpsam` (Cellpose 4).
+warning: brieflow segments nuclei with `cpsam` next to `cpsam` cells, else `nuclei`.
 
 To re-pin: `git -C <brieflow> fetch origin && git -C <brieflow> checkout <commit>`, then
 `python scripts/sync_brieflow.py --brieflow <brieflow>` (reads files at `--ref`, default `HEAD`;

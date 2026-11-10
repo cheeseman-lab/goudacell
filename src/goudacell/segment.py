@@ -4,19 +4,21 @@ Dual (nuclei + cells) and nuclei-only segmentation call brieflow's ``segment_cel
 (``goudacell.brieflow.shared.segment_cellpose``) exactly as brieflow-analysis's phenotype
 notebook does; diameters come from brieflow's ``estimate_diameters``; reconciliation and
 cytoplasm identification are brieflow's. Cells-only segmentation, sweeps and the
-reproducibility helpers are goudacell extras. Supports Cellpose 3.x and 4.x.
+reproducibility helpers are goudacell extras. As in brieflow, both Cellpose versions are
+installed and the model name picks one:
 
-Cellpose 3.x (3.1.0):
+Cellpose 3.1.0 (the ``cellpose3`` package):
     - Models: cyto3, nuclei, cyto2, cyto
     - Supports automatic diameter estimation
 
-Cellpose 4.x (4.0.4+):
+Cellpose 4 (the ``cellpose`` package):
     - Models: cpsam (Cellpose-SAM)
     - Diameters are measured from a diameter-free run instead of estimated
 
-Either version accepts a path to a custom trained model in place of a model name.
+A path to a custom trained model runs on the version whose network the weights file holds.
 """
 
+import importlib
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -33,32 +35,25 @@ from goudacell.brieflow.shared.segmentation_utils import (  # noqa: F401
 )
 
 
-def get_cellpose_version() -> Tuple[int, int]:
-    """Get the installed Cellpose version.
+def get_cellpose_version(model: str = "cyto3") -> Tuple[int, int]:
+    """Get the installed version of the Cellpose package that runs ``model``.
+
+    Args:
+        model: Cellpose model name: cyto3, cyto2, cyto, nuclei run on Cellpose 3.1.0
+            (``cellpose3``), cpsam on Cellpose 4 (``cellpose``).
 
     Returns:
         Tuple of (major, minor) version numbers.
 
     Raises:
-        ImportError: If Cellpose is not installed.
+        ImportError: If that Cellpose package is not installed.
+        ValueError: If ``model`` is not a known Cellpose model.
     """
-    try:
-        import cellpose
+    from goudacell.brieflow.shared import segment_cellpose as bf
 
-        version_str = cellpose.version if hasattr(cellpose, "version") else cellpose.__version__
-        parts = version_str.split(".")[:2]
-        return (int(parts[0]), int(parts[1]))
-    except ImportError:
-        raise ImportError(
-            "Cellpose is not installed. Install with either:\n"
-            "  uv pip install -e '.[cellpose3]'  # For cyto3, nuclei models\n"
-            "  uv pip install -e '.[cellpose4]'  # For cpsam model"
-        )
-
-
-def _is_cellpose_4x() -> bool:
-    """Check if Cellpose 4.x is installed."""
-    return get_cellpose_version()[0] >= 4
+    root = importlib.import_module(bf.CELLPOSE_PACKAGES[bf.cellpose_version_for_model(model)])
+    parts = str(root.version).split(".")[:2]
+    return (int(parts[0]), int(parts[1]))
 
 
 def _is_custom_model(model: Optional[str]) -> bool:
@@ -66,9 +61,16 @@ def _is_custom_model(model: Optional[str]) -> bool:
     return model is not None and ("/" in model or "\\" in model)
 
 
-def brieflow_nuclei_model() -> str:
-    """The model brieflow segments nuclei with next to cells: nuclei (3.x) or cpsam (4.x)."""
-    return "cpsam" if _is_cellpose_4x() else "nuclei"
+def _runs_on_cellpose4(model: str) -> bool:
+    """Whether ``model`` is a Cellpose 4 model (cpsam), as brieflow decides it."""
+    from goudacell.brieflow.shared import segment_cellpose as bf
+
+    return bf.cellpose_version_for_model(model) == 4
+
+
+def brieflow_nuclei_model(cell_model: str = "cyto3") -> str:
+    """The model brieflow segments nuclei with next to ``cell_model``: cpsam or nuclei."""
+    return "cpsam" if _runs_on_cellpose4(cell_model) else "nuclei"
 
 
 def create_cellpose_model(model: str, gpu: bool = False):
@@ -82,7 +84,8 @@ def create_cellpose_model(model: str, gpu: bool = False):
         An initialized ``cellpose.models.CellposeModel``.
 
     Raises:
-        ValueError: If the model is incompatible with the installed Cellpose version.
+        ValueError: If the model is not a known Cellpose model or weights file.
+        ImportError: If the Cellpose package that runs the model is not installed.
     """
     from goudacell.brieflow.shared import segment_cellpose as bf
 
@@ -109,8 +112,8 @@ def segment(
             - 3D (C, Y, X): Multi-channel
         diameter: Estimated cell diameter in pixels.
         model: Cellpose model to use:
-            - Cellpose 3.x: 'cyto3' (default), 'nuclei', 'cyto2', 'cyto'
-            - Cellpose 4.x: 'cpsam' only
+            - Cellpose 3.1.0: 'cyto3' (default), 'nuclei', 'cyto2', 'cyto'
+            - Cellpose 4: 'cpsam'
             - Either version: a path to a custom trained model
         channels: Channel specification for Cellpose [cytoplasm, nucleus].
             For grayscale: [0, 0]
@@ -125,8 +128,8 @@ def segment(
         Segmentation mask with integer labels (0 = background).
 
     Raises:
-        ImportError: If Cellpose is not installed.
-        ValueError: If model is incompatible with Cellpose version.
+        ImportError: If the Cellpose package that runs the model is not installed.
+        ValueError: If the model is not a known Cellpose model or weights file.
     """
     from skimage.segmentation import clear_border
 
@@ -191,7 +194,8 @@ def segment_nuclei_and_cells(
         cell_diameter: Cell diameter in pixels (None lets Cellpose pick).
         cell_model: Cellpose model for cells ("cyto3", "cpsam", or a custom model path).
         nuclei_model: Accepted for backward compatibility; brieflow always segments nuclei
-            with :func:`brieflow_nuclei_model`, so any other value is ignored with a warning.
+            with :func:`brieflow_nuclei_model` of ``cell_model``, so any other value is
+            ignored with a warning.
         nuclei_flow_threshold: Flow threshold for nuclei segmentation.
         nuclei_cellprob_threshold: Cell prob threshold for nuclei segmentation.
         cell_flow_threshold: Flow threshold for cell segmentation.
@@ -210,10 +214,10 @@ def segment_nuclei_and_cells(
     """
     from goudacell.brieflow.shared import segment_cellpose as bf
 
-    if nuclei_model is not None and nuclei_model != brieflow_nuclei_model():
+    if nuclei_model is not None and nuclei_model != brieflow_nuclei_model(cell_model):
         warnings.warn(
             f"nuclei_model={nuclei_model!r} is ignored: brieflow segments nuclei with "
-            f"{brieflow_nuclei_model()!r} next to cells",
+            f"{brieflow_nuclei_model(cell_model)!r} next to {cell_model!r} cells",
             stacklevel=2,
         )
 
@@ -792,10 +796,10 @@ def estimate_diameter(
     channels: Optional[list] = None,
     gpu: bool = True,
 ) -> float:
-    """Estimate optimal cell diameter using Cellpose SizeModel.
+    """Estimate optimal cell diameter using the Cellpose 3.1.0 SizeModel.
 
-    Note: Only available with Cellpose 3.x. Cellpose 4.x does not support
-    automatic diameter estimation.
+    Note: Only available for built-in Cellpose 3 models. cpsam (Cellpose 4) has no
+    size model.
 
     Args:
         image: Input image array.
@@ -807,17 +811,18 @@ def estimate_diameter(
         Estimated diameter in pixels.
 
     Raises:
-        NotImplementedError: If using Cellpose 4.x.
+        NotImplementedError: For cpsam (Cellpose 4) or a custom model path.
     """
-    if _is_cellpose_4x():
+    from goudacell.brieflow.shared import segment_cellpose as bf
+
+    if _is_custom_model(model) or _runs_on_cellpose4(model):
         raise NotImplementedError(
-            "Automatic diameter estimation is not supported with Cellpose 4.x. "
-            "Please specify diameter explicitly, or use Cellpose 3.x: "
-            "uv pip install cellpose==3.1.0"
+            f"Automatic diameter estimation needs a built-in Cellpose 3 model; {model!r} has "
+            "no size model. Specify the diameter explicitly."
         )
 
-    from cellpose import models as cellpose_models
-    from cellpose.models import CellposeModel, SizeModel
+    cellpose_models = bf.cellpose_models_for(3, model)
+    CellposeModel, SizeModel = cellpose_models.CellposeModel, cellpose_models.SizeModel
 
     if channels is None:
         channels = [0, 0] if image.ndim == 2 else [2, 3]
@@ -846,7 +851,7 @@ def estimate_diameters(
 ) -> Tuple[float, float]:
     """Estimate nuclei and cell diameters with brieflow's ``estimate_diameters``.
 
-    Only Cellpose 3.x built-in models have a size model. For Cellpose 4.x, cpsam and
+    Only built-in Cellpose 3 models have a size model. For cpsam (Cellpose 4) and
     custom models, segment with ``diameter=None`` and use :func:`derive_diameters`, as
     brieflow's phenotype notebook does.
 
@@ -854,7 +859,7 @@ def estimate_diameters(
         image: Input image with shape (C, Y, X).
         nuclei_channel: Index of the nuclear channel.
         cyto_channel: Index of the cytoplasmic channel.
-        cell_model: Built-in Cellpose 3.x model for the cell estimate.
+        cell_model: Built-in Cellpose 3 model for the cell estimate.
         helper_channel: Optional helper channel for the red plane.
         gpu: Whether to use GPU.
 
@@ -862,13 +867,13 @@ def estimate_diameters(
         Tuple of (nuclei_diameter, cell_diameter) in pixels.
 
     Raises:
-        NotImplementedError: With Cellpose 4.x, or for cpsam / custom model paths.
+        NotImplementedError: For cpsam (Cellpose 4) or a custom model path.
     """
     from goudacell.brieflow.shared import segment_cellpose as bf
 
-    if bf.CELLPOSE_4X or cell_model == "cpsam" or _is_custom_model(cell_model):
+    if _is_custom_model(cell_model) or _runs_on_cellpose4(cell_model):
         raise NotImplementedError(
-            "Automatic diameter estimation needs Cellpose 3.x and a built-in model. "
+            "Automatic diameter estimation needs a built-in Cellpose 3 model. "
             "Segment with diameter=None and use derive_diameters(), or set diameters "
             "explicitly."
         )

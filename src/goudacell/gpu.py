@@ -73,7 +73,7 @@ def detect_gpu() -> GPUStatus:
             driver_detected=_nvidia_smi_detects_gpu(),
             reason=(
                 "PyTorch is not installed. Install a GPU build with "
-                "`uv pip install -e '.[cellpose4]'`."
+                "`uv pip install -e '.[cellpose]'`."
             ),
         )
 
@@ -100,7 +100,7 @@ def detect_gpu() -> GPUStatus:
     elif cuda_build is None:
         reason = (
             "A GPU is present but torch is a CPU-only build (torch.version.cuda "
-            "is None). Reinstall a CUDA build: `uv pip install -e '.[cellpose4]'`."
+            "is None). Reinstall a CUDA build: `uv pip install -e '.[cellpose]'`."
         )
     else:
         reason = (

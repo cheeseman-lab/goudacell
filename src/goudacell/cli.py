@@ -348,19 +348,15 @@ def version() -> None:
 
     console.print(f"GoudaCell version: [cyan]{__version__}[/cyan]")
 
-    try:
-        from goudacell.segment import get_cellpose_version
+    from goudacell.segment import get_cellpose_version
 
-        cp_version = get_cellpose_version()
-        console.print(f"Cellpose version: [cyan]{cp_version[0]}.{cp_version[1]}[/cyan]")
-
-        if cp_version[0] >= 4:
-            console.print("  Available models: [yellow]cpsam[/yellow]")
-        else:
-            console.print("  Available models: [yellow]cyto3, nuclei, cyto2, cyto[/yellow]")
-    except ImportError:
-        console.print("[yellow]Cellpose not installed[/yellow]")
-        console.print("  Install with: uv pip install -e '.[cellpose3]' or '.[cellpose4]'")
+    for model, models in (("cyto3", "cyto3, nuclei, cyto2, cyto"), ("cpsam", "cpsam")):
+        try:
+            cp_version = get_cellpose_version(model)
+            console.print(f"Cellpose {cp_version[0]}.{cp_version[1]}: [yellow]{models}[/yellow]")
+        except ImportError:
+            console.print(f"[yellow]Cellpose for {models} not installed[/yellow]")
+            console.print("  Install with: uv pip install -e '.[cellpose]'")
 
     from goudacell.gpu import detect_gpu
 

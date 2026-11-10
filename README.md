@@ -9,7 +9,7 @@ Cell segmentation and feature extraction on a Slurm HPC cluster (or any GPU mach
 - **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
 - **Brieflow inside**: runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype code (vendored unchanged), so masks and features match brieflow's for the same parameters
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
-- **Cellpose 3 & 4**: Supports both versions with automatic model selection
+- **Cellpose 3 & 4**: Both installed, as in brieflow; the model name picks the version
 
 GoudaCell is a **single-shot tool** — run it once on your images to produce segmentation masks and features, then use the outputs in your downstream analysis. One of the [Cheeseman lab](https://github.com/cheeseman-lab)'s single-purpose GPU tools (see also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) for protein embeddings).
 
@@ -41,10 +41,9 @@ cd goudacell
 conda create -n goudacell -c conda-forge python=3.11 uv pip -y
 conda activate goudacell
 
-# Install goudacell (choose ONE):
-uv pip install -e ".[cellpose3]"  # For most cells (rounded shapes)
-uv pip install -e ".[cellpose4]"  # For complex cell shapes
-# Both extras pin torch to the cu126 wheel (CUDA 12.6; needs NVIDIA driver >= 560).
+# Install goudacell with Cellpose 3.1.0 and Cellpose 4 (needs git and network access)
+uv pip install -e ".[cellpose]"
+# The extra pins torch to the cu126 wheel (CUDA 12.6; needs NVIDIA driver >= 560).
 # Check the GPU is usable with: goudacell version  (or the notebook's GPU banner)
 
 # Register as a Jupyter kernel
@@ -257,12 +256,15 @@ finds none.
 
 ## Which Cellpose Version?
 
-| Version | Install with | Use for |
-|---------|--------------|---------|
-| Cellpose 3 | `.[cellpose3]` | Round cells (most common) |
-| Cellpose 4 | `.[cellpose4]` | Irregular/complex shapes |
+`.[cellpose]` installs both, as brieflow does, and the model name picks the version:
 
-Either version also accepts a path to a custom trained model in place of a model name.
+| Version | Package | Models | Use for |
+|---------|---------|--------|---------|
+| Cellpose 3.1.0 | `cellpose3` | `cyto3`, `cyto2`, `cyto`, `nuclei` | Round cells (most common) |
+| Cellpose 4 | `cellpose` | `cpsam` | Irregular/complex shapes |
+
+A path to a custom trained model runs on the version whose network the weights file holds.
+In dual mode nuclei are segmented with `cpsam` next to `cpsam` cells, else with `nuclei`.
 
 ## File Formats Supported
 

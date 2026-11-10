@@ -10,7 +10,8 @@ by ``scripts/sync_brieflow.py``). These tests check that:
 Skipped unless ``BRIEFLOW_LIB`` points at a brieflow git checkout. Test 1 reads the pinned
 commit from git, whatever the checkout's state; tests 2 import brieflow's ``lib`` from the
 checkout and need it at the pinned commit. The Cellpose tests run on CPU (use a compute
-node) on ``GOUDACELL_PARITY_TILE`` (a phenotype image; ``GOUDACELL_PARITY_CHANNELS="3,1"``
+node) with the cell model ``GOUDACELL_PARITY_MODEL`` (default cyto3, Cellpose 3; cpsam runs
+Cellpose 4) on ``GOUDACELL_PARITY_TILE`` (a phenotype image; ``GOUDACELL_PARITY_CHANNELS="3,1"``
 sets the DAPI and cytoplasm channels, default last and 1), else on the first image in the
 checkout's ``tests/small_test_analysis/small_test_data/phenotype/real_images``, else on a
 synthetic tile.
@@ -327,7 +328,7 @@ def _real_tile():
 @pytest.fixture(scope="module")
 def cellpose_tile():
     """(image, dapi_index, cyto_index): a real phenotype crop, else a smooth synthetic tile."""
-    pytest.importorskip("cellpose")
+    pytest.importorskip("cellpose" if _cellpose_4x() else "cellpose3")
     real = _real_tile()
     if real is not None:
         return real
@@ -338,8 +339,11 @@ def cellpose_tile():
     return np.stack(smooth).astype(np.uint16), 0, 1
 
 
+CELL_MODEL = os.environ.get("GOUDACELL_PARITY_MODEL", "cyto3")
+
+
 def _cellpose_4x():
-    return _brieflow("lib.shared.segment_cellpose").CELLPOSE_4X
+    return CELL_MODEL in _brieflow("lib.shared.segment_cellpose").CELLPOSE4_MODELS
 
 
 # The phenotype notebook's defaults
@@ -358,7 +362,7 @@ def diameters(cellpose_tile):
         return 20.0, 45.0
     bsc = _brieflow("lib.shared.segment_cellpose")
     return _quiet(
-        bsc.estimate_diameters, image, dapi_index=dapi, cyto_index=cyto, cellpose_model="cyto3"
+        bsc.estimate_diameters, image, dapi_index=dapi, cyto_index=cyto, cellpose_model=CELL_MODEL
     )
 
 
@@ -370,7 +374,7 @@ def brieflow_masks(cellpose_tile, diameters):
     return _quiet(
         bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
         nuclei_diameter=diameters[0], cell_diameter=diameters[1],
-        cellpose_kwargs=dict(THRESHOLDS), cellpose_model="cpsam" if _cellpose_4x() else "cyto3",
+        cellpose_kwargs=dict(THRESHOLDS), cellpose_model=CELL_MODEL,
         helper_index=None, gpu=False, reconcile="contained_in_cells", cells=True,
         return_counts=True,
     )
@@ -379,11 +383,11 @@ def brieflow_masks(cellpose_tile, diameters):
 @at_pin
 def test_estimate_diameters(cellpose_tile, diameters):
     if _cellpose_4x():
-        pytest.skip("Cellpose 4.x has no size model")
+        pytest.skip("Cellpose 4 has no size model")
     from goudacell.segment import estimate_diameters
 
     image, dapi, cyto = cellpose_tile
-    ours = _quiet(estimate_diameters, image, dapi, cyto, cell_model="cyto3", gpu=False)
+    ours = _quiet(estimate_diameters, image, dapi, cyto, cell_model=CELL_MODEL, gpu=False)
     assert ours == diameters
 
 
@@ -395,7 +399,7 @@ def test_dual_segmentation(cellpose_tile, diameters, brieflow_masks):
     nuclei, cells, nuclei_per_cell = _quiet(
         segment_nuclei_and_cells, image, nuclei_channel=dapi, cyto_channel=cyto,
         nuclei_diameter=diameters[0], cell_diameter=diameters[1],
-        cell_model="cpsam" if _cellpose_4x() else "cyto3", gpu=False,
+        cell_model=CELL_MODEL, gpu=False,
         reconcile="contained_in_cells", return_nuclei_per_cell=True, **THRESHOLDS,
     )
     np.testing.assert_array_equal(nuclei, brieflow_masks[0])
@@ -410,7 +414,7 @@ def test_nuclei_only_segmentation(cellpose_tile, diameters):
     from goudacell.segment import brieflow_nuclei_model, segment_nuclei
 
     image, dapi, cyto = cellpose_tile
-    model = brieflow_nuclei_model()
+    model = brieflow_nuclei_model(CELL_MODEL)
     theirs = _quiet(
         bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
         nuclei_diameter=diameters[0], cell_diameter=None, cellpose_model=model,
@@ -449,8 +453,8 @@ def test_cli_matches_brieflow(cellpose_tile, diameters, brieflow_masks, tmp_path
         mode="dual", gpu=False, reconcile="contained_in_cells",
         dual=DualSegmentationParams(
             nuclei_channel=dapi, cyto_channel=cyto, nuclei_diameter=diameters[0],
-            cell_diameter=diameters[1], cell_model="cpsam" if _cellpose_4x() else "cyto3",
-            nuclei_model=brieflow_nuclei_model(), **THRESHOLDS,
+            cell_diameter=diameters[1], cell_model=CELL_MODEL,
+            nuclei_model=brieflow_nuclei_model(CELL_MODEL), **THRESHOLDS,
         ),
         feature_extraction=FeatureExtractionParams(
             enabled=True, channel_names=names, output_path="{stem}_features.csv"

@@ -370,6 +370,21 @@ def masks_reconciled(nuclei: np.ndarray, cells: np.ndarray) -> bool:
     return np.array_equal(paired, nuclei_labels)
 
 
+def _needs_newer_brieflow(params) -> list:
+    """Requested secondary-object features the vendored brieflow does not implement yet."""
+    import inspect
+
+    from goudacell.brieflow.phenotype import segment_secondary_object as bso
+
+    src = inspect.getsource(bso)
+    missing = []
+    if params.second_obj_mode == "count" and "second_obj_mode" not in src:
+        missing.append("count mode")
+    if params.second_obj_method == "threshold" and f'"{params.threshold_method}"' not in src:
+        missing.append(f"threshold_method {params.threshold_method!r}")
+    return missing
+
+
 def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
     """Detect secondary objects with brieflow's ``segment_second_objs_from_config``.
 
@@ -386,10 +401,15 @@ def segment_second_objects(image, nuclei_masks, cell_masks, params, gpu):
     Returns:
         Tuple of (second_obj_masks, cell_second_obj_table, updated_cytoplasm_masks).
     """
-    from goudacell.brieflow.phenotype.segment_secondary_object import (
-        segment_second_objs_from_config,
-    )
+    from goudacell.brieflow.phenotype import segment_secondary_object as bso
 
+    missing = _needs_newer_brieflow(params)
+    if missing:
+        raise NotImplementedError(
+            f"{', '.join(missing)} needs vendored brieflow 1.5.2+; re-sync with "
+            "scripts/sync_brieflow.py once it is released"
+        )
+    segment_second_objs_from_config = bso.segment_second_objs_from_config
     centroids = {r.label: r.centroid for r in regionprops(nuclei_masks)}
     return segment_second_objs_from_config(
         image=image,
@@ -681,8 +701,9 @@ def sweep_grid(
             masks = _segment_with_overrides(
                 image, params, {attr_x: vx}, mode, target, gpu, remove_edge_cells
             )
-            cells.append(GridCell(ix=ix, iy=0, x=vx, y=None, masks=masks,
-                                  count=_count_objects(masks)))
+            cells.append(
+                GridCell(ix=ix, iy=0, x=vx, y=None, masks=masks, count=_count_objects(masks))
+            )
         return cells
 
     param_y, values_y = axis_y
@@ -692,8 +713,9 @@ def sweep_grid(
             masks = _segment_with_overrides(
                 image, params, {attr_x: vx, attr_y: vy}, mode, target, gpu, remove_edge_cells
             )
-            cells.append(GridCell(ix=ix, iy=iy, x=vx, y=vy, masks=masks,
-                                  count=_count_objects(masks)))
+            cells.append(
+                GridCell(ix=ix, iy=iy, x=vx, y=vy, masks=masks, count=_count_objects(masks))
+            )
     return cells
 
 
@@ -837,8 +859,6 @@ def estimate_diameter(
     diameter = max(5.0, float(diameter))
 
     return diameter
-
-
 
 
 def estimate_diameters(

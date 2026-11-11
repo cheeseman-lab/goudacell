@@ -180,7 +180,8 @@ def extract_features(
             )
 
     drop = [
-        c for c in df.columns
+        c
+        for c in df.columns
         if (not include_correlation and "_coloc_" in c)
         or (not include_neighbors and ("_neighbor_" in c or c.endswith(NEIGHBOR_COLUMNS)))
     ]

@@ -354,10 +354,14 @@ def extract_features_cellprofiler(
             cellprofiler_cmd,
             "-c",
             "-r",
-            "-p", str(pipeline_file),
-            "-i", str(input_dir.resolve()),
-            "-o", str(cp_output_dir.resolve()),
-            "-t", str(cp_temp_dir.resolve()),
+            "-p",
+            str(pipeline_file),
+            "-i",
+            str(input_dir.resolve()),
+            "-o",
+            str(cp_output_dir.resolve()),
+            "-t",
+            str(cp_temp_dir.resolve()),
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -443,10 +447,14 @@ def run_cellprofiler_batch(
         _unset_legacy_default(cellprofiler_cmd) or find_cellprofiler() or "cellprofiler",
         "-c",  # headless
         "-r",  # run
-        "-p", str(pipeline_file),
-        "-i", str(input_dir),
-        "-o", str(output_dir),
-        "-t", str(output_dir / "tmp"),  # CellProfiler's temp files, not /tmp
+        "-p",
+        str(pipeline_file),
+        "-i",
+        str(input_dir),
+        "-o",
+        str(output_dir),
+        "-t",
+        str(output_dir / "tmp"),  # CellProfiler's temp files, not /tmp
     ]
 
     if first_image is not None:

@@ -205,9 +205,7 @@ def segment(
 
                     # Feature extraction if enabled
                     if fe and fe.enabled:
-                        features_df = _extract_features_for(
-                            fe, image, nuclei_masks, cell_masks
-                        )
+                        features_df = _extract_features_for(fe, image, nuclei_masks, cell_masks)
                         features_df = add_num_nuclei(features_df, nuclei_per_cell)
                         if detect_second_objs:
                             features_df = merge_second_obj_summary(
@@ -220,9 +218,7 @@ def segment(
                                 cfg.get_second_obj_features_output_path(input_file), index=False
                             )
                             if combine:
-                                combined_second_obj_frames.append(
-                                    (second_obj_df, input_file.name)
-                                )
+                                combined_second_obj_frames.append((second_obj_df, input_file.name))
                         features_path = cfg.get_features_output_path(input_file)
                         features_df.to_csv(features_path, index=False)
                         if combine:

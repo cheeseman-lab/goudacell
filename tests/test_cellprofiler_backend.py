@@ -182,8 +182,13 @@ def test_cellprofiler_table(tile, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     image, nuclei, cells = tile
     df = extract_features(
-        image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler",
-        pipeline_file=_pipeline(tmp_path / "measure.cppipe"), cellprofiler_cmd=CELLPROFILER,
+        image,
+        nuclei,
+        cells,
+        channel_names=["DAPI", "GFP"],
+        method="cellprofiler",
+        pipeline_file=_pipeline(tmp_path / "measure.cppipe"),
+        cellprofiler_cmd=CELLPROFILER,
     )
 
     # One row per mask label, keyed by the label, not CellProfiler's ObjectNumber
@@ -200,8 +205,13 @@ def test_cellprofiler_table(tile, tmp_path, monkeypatch):
     assert not list(tmp_path.glob("goudacell_cp_*"))
 
     nucleus_only = extract_features(
-        image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler",
-        pipeline_file=tmp_path / "measure.cppipe", cellprofiler_cmd=CELLPROFILER,
+        image,
+        nuclei,
+        cells,
+        channel_names=["DAPI", "GFP"],
+        method="cellprofiler",
+        pipeline_file=tmp_path / "measure.cppipe",
+        cellprofiler_cmd=CELLPROFILER,
         compartments=["nucleus"],
     )
     assert list(nucleus_only.columns) == [
@@ -215,7 +225,11 @@ def test_pipeline_without_object_tables_raises(tile, tmp_path, monkeypatch):
     image, nuclei, cells = tile
     with pytest.raises(RuntimeError, match="no Nuclei/Cells/Cytoplasm table"):
         extract_features(
-            image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler",
+            image,
+            nuclei,
+            cells,
+            channel_names=["DAPI", "GFP"],
+            method="cellprofiler",
             pipeline_file=_pipeline(tmp_path / "load_only.cppipe", measure=False),
             cellprofiler_cmd=CELLPROFILER,
         )
@@ -235,7 +249,9 @@ def test_default_pipeline_runs(tile, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     image, nuclei, cells = tile
     # No pipeline and no command: the default pipeline, run by the CellProfiler found
-    df = extract_features(image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler")
+    df = extract_features(
+        image, nuclei, cells, channel_names=["DAPI", "GFP"], method="cellprofiler"
+    )
 
     assert df["label"].tolist() == LABELS
     assert df["cell_AreaShape_Area"].tolist() == [np.sum(cells == lab) for lab in LABELS]
@@ -252,8 +268,14 @@ def test_default_pipeline_runs(tile, tmp_path, monkeypatch):
     assert not list(tmp_path.glob("goudacell_cp_*"))
 
     lean = extract_features(
-        image, nuclei, None, channel_names=["DAPI", "GFP"], method="cellprofiler",
-        include_texture=False, include_correlation=False, include_neighbors=False,
+        image,
+        nuclei,
+        None,
+        channel_names=["DAPI", "GFP"],
+        method="cellprofiler",
+        include_texture=False,
+        include_correlation=False,
+        include_neighbors=False,
     )
     assert lean["label"].tolist() == LABELS
     assert not [c for c in lean.columns if c.startswith(("cell_", "cytoplasm_"))]
@@ -343,13 +365,17 @@ def test_check_cellprofiler(no_cellprofiler, fresh_checks, monkeypatch):
     assert calls.read_text().count("run") == 1
 
     old = _executable(root / "old/cellprofiler", "echo 4.1.3")
-    with pytest.raises(RuntimeError, match="from cellprofiler_cmd.*is CellProfiler 4.1.3, not 4.2.x"):
+    with pytest.raises(
+        RuntimeError, match="from cellprofiler_cmd.*is CellProfiler 4.1.3, not 4.2.x"
+    ):
         check_cellprofiler(str(old))
     not_cp = _executable(root / "other/cellprofiler", "echo boom >&2; exit 2")
     with pytest.raises(RuntimeError, match="(?s)not a working CellProfiler.*exited 2.*boom"):
         check_cellprofiler(str(not_cp))
     monkeypatch.setenv("GOUDACELL_CELLPROFILER", str(root / "missing/cellprofiler"))
-    with pytest.raises(RuntimeError, match="from the GOUDACELL_CELLPROFILER env var.*doesn't exist"):
+    with pytest.raises(
+        RuntimeError, match="from the GOUDACELL_CELLPROFILER env var.*doesn't exist"
+    ):
         check_cellprofiler()
 
 
@@ -384,7 +410,11 @@ def test_timeout_names_the_setting(no_cellprofiler, fresh_checks, tile, monkeypa
     image, nuclei, cells = tile
     with pytest.raises(RuntimeError, match="within 1 s.*feature_extraction.cellprofiler_timeout"):
         extract_features(
-            image, nuclei, cells, method="cellprofiler", cellprofiler_cmd=str(slow),
+            image,
+            nuclei,
+            cells,
+            method="cellprofiler",
+            cellprofiler_cmd=str(slow),
             cellprofiler_timeout=1,
         )
     assert not list(root.glob("goudacell_cp_*"))

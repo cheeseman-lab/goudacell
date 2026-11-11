@@ -95,16 +95,22 @@ def test_check_defaults_to_the_pin(tmp_path):
     """``--check`` compares against the pin even when the checkout's HEAD is elsewhere."""
     sync = _sync_module()
     bare = tmp_path / "brieflow.git"
-    subprocess.run(
-        ["git", "clone", "-q", "--bare", "--shared", str(ROOT), str(bare)], check=True
-    )
+    subprocess.run(["git", "clone", "-q", "--bare", "--shared", str(ROOT), str(bare)], check=True)
 
     def git(*args, **kwargs):
         return subprocess.run(
-            ["git", "-C", str(bare), *args], capture_output=True, text=True, check=True,
-            env={**os.environ, "GIT_INDEX_FILE": str(tmp_path / "index"),
-                 "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+            ["git", "-C", str(bare), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={
+                **os.environ,
+                "GIT_INDEX_FILE": str(tmp_path / "index"),
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@t",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@t",
+            },
             **kwargs,
         ).stdout.strip()
 
@@ -127,7 +133,9 @@ def test_only_imports_are_rewritten():
     for module in sync.MODULES:
         original = subprocess.run(
             ["git", "-C", str(ROOT), "show", f"{BRIEFLOW_COMMIT}:workflow/lib/{module}"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.splitlines()
         vendored = (sync.DEST / module).read_text().splitlines()
         assert len(original) == len(vendored), module
@@ -209,12 +217,23 @@ def test_cp_emulator_features(tile, with_cells):
     cytoplasms = _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells) if with_cells else None
 
     theirs = bemu.extract_phenotype_cp_emulator(
-        image, nuclei, cells_in, wildcards={}, cytoplasms=cytoplasms, foci_channel=[2],
-        channel_names=CHANNEL_NAMES, custom_features=bcf.load_custom_features(definitions),
+        image,
+        nuclei,
+        cells_in,
+        wildcards={},
+        cytoplasms=cytoplasms,
+        foci_channel=[2],
+        channel_names=CHANNEL_NAMES,
+        custom_features=bcf.load_custom_features(definitions),
     )
     ours = _quiet(
-        extract_features, image, nuclei, cells_in, channel_names=CHANNEL_NAMES,
-        foci_channel=[2], custom_features=load_custom_features(definitions),
+        extract_features,
+        image,
+        nuclei,
+        cells_in,
+        channel_names=CHANNEL_NAMES,
+        foci_channel=[2],
+        custom_features=load_custom_features(definitions),
     )
     pd.testing.assert_frame_equal(ours, theirs)
 
@@ -228,8 +247,15 @@ def test_feature_selection_is_a_column_subset(tile):
     selection = dict(channel_names=["DAPI", "TUB"], channels=[0, 1])
     full = _quiet(extract_features, image, nuclei, cells, **selection)
     subset = _quiet(
-        extract_features, image, nuclei, cells, compartments=["nucleus", "cytoplasm"],
-        include_texture=False, include_correlation=False, include_neighbors=False, **selection,
+        extract_features,
+        image,
+        nuclei,
+        cells,
+        compartments=["nucleus", "cytoplasm"],
+        include_texture=False,
+        include_correlation=False,
+        include_neighbors=False,
+        **selection,
     )
     assert set(subset.columns) < set(full.columns)
     assert not any(c.startswith("cell_") for c in subset.columns)
@@ -247,13 +273,21 @@ def test_cp_measure_features(tile):
 
     image, nuclei, cells = tile
     theirs = _quiet(
-        bcm.extract_phenotype_cp_measure, image[:2], nuclei, cells,
+        bcm.extract_phenotype_cp_measure,
+        image[:2],
+        nuclei,
+        cells,
         cytoplasms=_quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
         channel_names=CHANNEL_NAMES[:2],
     )
     ours = _quiet(
-        extract_features, image, nuclei, cells, channel_names=CHANNEL_NAMES[:2],
-        channels=[0, 1], method="cp_measure",
+        extract_features,
+        image,
+        nuclei,
+        cells,
+        channel_names=CHANNEL_NAMES[:2],
+        channels=[0, 1],
+        method="cp_measure",
     )
     pd.testing.assert_frame_equal(ours, theirs)
 
@@ -283,9 +317,12 @@ def test_secondary_objects(tile, overrides):
     # The phenotype notebook: nucleus centroids from the nuclei mask
     centroids = {r.label: r.centroid for r in regionprops(nuclei)}
     theirs = _quiet(
-        bso.segment_second_objs_from_config, image, cells,
+        bso.segment_second_objs_from_config,
+        image,
+        cells,
         _quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
-        params.to_brieflow_params(gpu=False), nuclei_centroids=centroids,
+        params.to_brieflow_params(gpu=False),
+        nuclei_centroids=centroids,
     )
     ours = _quiet(segment_second_objects, image, nuclei, cells, params, False)
     np.testing.assert_array_equal(ours[0], theirs[0])
@@ -296,8 +333,12 @@ def test_secondary_objects(tile, overrides):
 
     fe = FeatureExtractionParams(enabled=True, channel_names=CHANNEL_NAMES, foci_channel=2)
     their_features = _quiet(
-        bfeat.extract_phenotype_second_objs, image, second_objs=theirs[0], wildcards={},
-        second_obj_cell_mapping_df=theirs[1]["second_obj_cell_mapping"], foci_channel=2,
+        bfeat.extract_phenotype_second_objs,
+        image,
+        second_objs=theirs[0],
+        wildcards={},
+        second_obj_cell_mapping_df=theirs[1]["second_obj_cell_mapping"],
+        foci_channel=2,
         channel_names=CHANNEL_NAMES,
     )
     our_features = _quiet(extract_second_obj_features, fe, image, ours[0], ours[1])
@@ -372,10 +413,18 @@ def brieflow_masks(cellpose_tile, diameters):
     bsc = _brieflow("lib.shared.segment_cellpose")
     image, dapi, cyto = cellpose_tile
     return _quiet(
-        bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
-        nuclei_diameter=diameters[0], cell_diameter=diameters[1],
-        cellpose_kwargs=dict(THRESHOLDS), cellpose_model=CELL_MODEL,
-        helper_index=None, gpu=False, reconcile="contained_in_cells", cells=True,
+        bsc.segment_cellpose,
+        image,
+        dapi_index=dapi,
+        cyto_index=cyto,
+        nuclei_diameter=diameters[0],
+        cell_diameter=diameters[1],
+        cellpose_kwargs=dict(THRESHOLDS),
+        cellpose_model=CELL_MODEL,
+        helper_index=None,
+        gpu=False,
+        reconcile="contained_in_cells",
+        cells=True,
         return_counts=True,
     )
 
@@ -397,10 +446,17 @@ def test_dual_segmentation(cellpose_tile, diameters, brieflow_masks):
 
     image, dapi, cyto = cellpose_tile
     nuclei, cells, nuclei_per_cell = _quiet(
-        segment_nuclei_and_cells, image, nuclei_channel=dapi, cyto_channel=cyto,
-        nuclei_diameter=diameters[0], cell_diameter=diameters[1],
-        cell_model=CELL_MODEL, gpu=False,
-        reconcile="contained_in_cells", return_nuclei_per_cell=True, **THRESHOLDS,
+        segment_nuclei_and_cells,
+        image,
+        nuclei_channel=dapi,
+        cyto_channel=cyto,
+        nuclei_diameter=diameters[0],
+        cell_diameter=diameters[1],
+        cell_model=CELL_MODEL,
+        gpu=False,
+        reconcile="contained_in_cells",
+        return_nuclei_per_cell=True,
+        **THRESHOLDS,
     )
     np.testing.assert_array_equal(nuclei, brieflow_masks[0])
     np.testing.assert_array_equal(cells, brieflow_masks[1])
@@ -416,10 +472,16 @@ def test_nuclei_only_segmentation(cellpose_tile, diameters):
     image, dapi, cyto = cellpose_tile
     model = brieflow_nuclei_model(CELL_MODEL)
     theirs = _quiet(
-        bsc.segment_cellpose, image, dapi_index=dapi, cyto_index=cyto,
-        nuclei_diameter=diameters[0], cell_diameter=None, cellpose_model=model,
+        bsc.segment_cellpose,
+        image,
+        dapi_index=dapi,
+        cyto_index=cyto,
+        nuclei_diameter=diameters[0],
+        cell_diameter=None,
+        cellpose_model=model,
         cellpose_kwargs=dict(nuclei_flow_threshold=0.4, nuclei_cellprob_threshold=0.0),
-        cells=False, gpu=False,
+        cells=False,
+        gpu=False,
     )
     ours = _quiet(segment_nuclei, image, dapi, diameters[0], model=model, gpu=False)
     np.testing.assert_array_equal(ours, theirs)
@@ -449,12 +511,19 @@ def test_cli_matches_brieflow(cellpose_tile, diameters, brieflow_masks, tmp_path
     tifffile.imwrite(tmp_path / "in" / "tile.tif", image)
 
     config = SegmentationConfig(
-        input_dir=str(tmp_path / "in"), output_dir=str(tmp_path / "out"),
-        mode="dual", gpu=False, reconcile="contained_in_cells",
+        input_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        mode="dual",
+        gpu=False,
+        reconcile="contained_in_cells",
         dual=DualSegmentationParams(
-            nuclei_channel=dapi, cyto_channel=cyto, nuclei_diameter=diameters[0],
-            cell_diameter=diameters[1], cell_model=CELL_MODEL,
-            nuclei_model=brieflow_nuclei_model(CELL_MODEL), **THRESHOLDS,
+            nuclei_channel=dapi,
+            cyto_channel=cyto,
+            nuclei_diameter=diameters[0],
+            cell_diameter=diameters[1],
+            cell_model=CELL_MODEL,
+            nuclei_model=brieflow_nuclei_model(CELL_MODEL),
+            **THRESHOLDS,
         ),
         feature_extraction=FeatureExtractionParams(
             enabled=True, channel_names=names, output_path="{stem}_features.csv"
@@ -470,7 +539,11 @@ def test_cli_matches_brieflow(cellpose_tile, diameters, brieflow_masks, tmp_path
 
     # brieflow's extract_phenotype.py: the cp_emulator table plus num_nuclei
     theirs = _quiet(
-        bemu.extract_phenotype_cp_emulator, image, nuclei, cells, wildcards={},
+        bemu.extract_phenotype_cp_emulator,
+        image,
+        nuclei,
+        cells,
+        wildcards={},
         cytoplasms=_quiet(bcyto.identify_cytoplasm_cellpose, nuclei, cells),
         channel_names=names,
     )

@@ -26,9 +26,7 @@ def _cellprofiler_importable(monkeypatch):
     monkeypatch.setattr(
         importlib.util,
         "find_spec",
-        lambda name, *args: (
-            object() if name == "cellprofiler" else real_find_spec(name, *args)
-        ),
+        lambda name, *args: (object() if name == "cellprofiler" else real_find_spec(name, *args)),
     )
 
 

@@ -122,7 +122,8 @@ def main(argv=None) -> int:
 
     files = vendored_sources(args.brieflow.expanduser().resolve(), args.ref)
     stale = [
-        path for path, text in files.items()
+        path
+        for path, text in files.items()
         if not (DEST / path).is_file() or (DEST / path).read_text() != text
     ]
     present = [str(p.relative_to(DEST)) for p in DEST.rglob("*.py")] if DEST.is_dir() else []

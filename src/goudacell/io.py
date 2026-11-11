@@ -57,8 +57,7 @@ def load_image(
         return _load_dv(file_path, channel=channel, z_project=z_project)
     else:
         raise ValueError(
-            f"Unsupported file format: {suffix}. "
-            "Supported: .nd2, .tif, .tiff, .dv, .zarr"
+            f"Unsupported file format: {suffix}. Supported: .nd2, .tif, .tiff, .dv, .zarr"
         )
 
 
@@ -472,6 +471,4 @@ def _parse_pixel_sizes(
                 "y": float(y) if y is not None else None,
                 "z": float(z) if z is not None else None,
             }
-    raise ValueError(
-        f"Unsupported pixel_size_um type: {type(ps)}. Expected float, tuple, or dict."
-    )
+    raise ValueError(f"Unsupported pixel_size_um type: {type(ps)}. Expected float, tuple, or dict.")

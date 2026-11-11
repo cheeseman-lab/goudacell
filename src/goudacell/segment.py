@@ -681,8 +681,9 @@ def sweep_grid(
             masks = _segment_with_overrides(
                 image, params, {attr_x: vx}, mode, target, gpu, remove_edge_cells
             )
-            cells.append(GridCell(ix=ix, iy=0, x=vx, y=None, masks=masks,
-                                  count=_count_objects(masks)))
+            cells.append(
+                GridCell(ix=ix, iy=0, x=vx, y=None, masks=masks, count=_count_objects(masks))
+            )
         return cells
 
     param_y, values_y = axis_y
@@ -692,8 +693,9 @@ def sweep_grid(
             masks = _segment_with_overrides(
                 image, params, {attr_x: vx, attr_y: vy}, mode, target, gpu, remove_edge_cells
             )
-            cells.append(GridCell(ix=ix, iy=iy, x=vx, y=vy, masks=masks,
-                                  count=_count_objects(masks)))
+            cells.append(
+                GridCell(ix=ix, iy=iy, x=vx, y=vy, masks=masks, count=_count_objects(masks))
+            )
     return cells
 
 
@@ -837,8 +839,6 @@ def estimate_diameter(
     diameter = max(5.0, float(diameter))
 
     return diameter
-
-
 
 
 def estimate_diameters(

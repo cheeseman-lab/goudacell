@@ -133,8 +133,13 @@ def plot_sweep_grid(
     if plateau is not None:
         ax.contour(plateau["mask"].astype(float), levels=[0.5], colors="red", linewidths=1.5)
         ax.scatter(
-            [plateau["ix"]], [plateau["iy"]], marker="*", s=220,
-            color="red", edgecolor="white", label="setpoint",
+            [plateau["ix"]],
+            [plateau["iy"]],
+            marker="*",
+            s=220,
+            color="red",
+            edgecolor="white",
+            label="setpoint",
         )
         ax.legend()
 
@@ -170,9 +175,7 @@ def plot_sweep_montage(
 
     n_rows = max(len(y_values), 1)
     n_cols = len(x_values)
-    fig, axes = plt.subplots(
-        n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows), squeeze=False
-    )
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows), squeeze=False)
     for row in axes:
         for ax in row:
             ax.axis("off")

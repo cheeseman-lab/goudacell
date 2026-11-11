@@ -50,8 +50,7 @@ def check_environment(require_cellpose: bool = False) -> None:
         else:
             if int(numpy_version.split(".")[0]) < MIN_NUMPY:
                 problem = (
-                    f"goudacell needs numpy >= {MIN_NUMPY} but {where} has numpy "
-                    f"{numpy_version}"
+                    f"goudacell needs numpy >= {MIN_NUMPY} but {where} has numpy {numpy_version}"
                 )
     if problem and importlib.util.find_spec("cellprofiler"):
         raise RuntimeError(f"{WRONG_KERNEL} ({problem}; it has CellProfiler).")

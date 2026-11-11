@@ -1,279 +1,213 @@
 # GoudaCell
 
-Cell segmentation and feature extraction on a Slurm HPC cluster (or any GPU machine) using Cellpose.
+Check and tune cell segmentation and secondary-object detection on your images before an
+optical pooled screen (OPS). GoudaCell runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s
+phenotype code unchanged, so what you tune here is what brieflow produces. It also works on its
+own to segment cells and extract features, on a Slurm cluster or any GPU machine.
 
-## Features
+- **Segmentation:** nuclei, cells, or both (dual), with Cellpose 3 or 4.
+- **Secondary objects:** objects inside cells (foci, organelles, pathogens), by threshold,
+  Cellpose or StarDist.
+- **Features:** CellProfiler-equivalent per-cell features, plus your own.
+- **Labeler:** a one-file browser page to check masks, and correct them for scoring or
+  fine-tuning.
 
-- **Segmentation modes**: nuclei-only, cells-only, or dual (both)
-- **Secondary objects**: detect objects inside cells (pathogens, organelles) by thresholding or Cellpose
-- **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
-- **Brieflow inside**: runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype code (vendored unchanged), so masks and features match brieflow's for the same parameters
-- **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
-- **Cellpose 3 & 4**: Both installed, as in brieflow; the model name picks the version
+## Workflow
 
-GoudaCell is a **single-shot tool** — run it once on your images to produce segmentation masks and features, then use the outputs in your downstream analysis. One of the [Cheeseman lab](https://github.com/cheeseman-lab)'s single-purpose GPU tools (see also: [emmentalembed](https://github.com/cheeseman-lab/emmentalembed) for protein embeddings).
-
-### What to do with the outputs
-
-**Segmentation masks** (TIFF label images):
-- Morphological profiling — extract per-cell features and cluster phenotypes ([Bray et al. 2016, Nature Protocols](https://doi.org/10.1038/nprot.2016.105))
-- Perturbation scoring — compare feature distributions between control and perturbed cells ([Celik et al. 2024, eLife](https://elifesciences.org/reviewed-preprints/94964))
-- Single-cell tracking — link masks across timepoints for live-cell analysis
-- Quality control — filter segmented objects by size, shape, or intensity
-
-**Extracted features** (CSV, ~100+ features per cell):
-- Dimensionality reduction — PCA/UMAP on feature space for phenotype discovery
-- Classification — train models to distinguish cell states or drug responses
-- Correlation analysis — link morphological features to genetic perturbations
-
-**Upgrading from 0.3?** 0.4.0 runs brieflow's phenotype code, so masks and feature tables change for existing configs. See [CHANGELOG.md](CHANGELOG.md#upgrading-from-03).
-
-## Getting Started
-
-### 1. Set Up Your Environment (one time)
+### 1. Install (once)
 
 ```bash
-# Clone the repository on your cluster
-git clone https://github.com/cheeseman-lab/goudacell.git
-cd goudacell
-
-# Create the environment
+git clone https://github.com/cheeseman-lab/goudacell.git && cd goudacell
 conda create -n goudacell -c conda-forge python=3.11 uv pip -y
 conda activate goudacell
-
-# Install goudacell with Cellpose 3.1.0 and Cellpose 4 (needs git and network access)
-uv pip install -e ".[cellpose]"
-# The extra pins torch to the cu126 wheel (CUDA 12.6; needs NVIDIA driver >= 560).
-# Check the GPU is usable with: goudacell version  (or the notebook's GPU banner)
-
-# Register as a Jupyter kernel
+uv pip install -e ".[cellpose]"   # Cellpose 3.1.0 + 4; torch cu126 (NVIDIA driver >= 560)
 python -m ipykernel install --user --name goudacell --display-name "goudacell"
+goudacell version                 # checks the GPU
 ```
 
-### 2. Test Parameters Interactively
+### 2. Tune parameters in the notebook
 
 ```bash
-# Start Jupyter on a GPU node (run from goudacell directory)
-cd /path/to/goudacell
-export SBATCH_PARTITION=<gpu-partition>   # your cluster's GPU partition (sinfo -o "%P %G")
-sbatch scripts/jupyter_gpu.sh
-
-# Check the output file for the URL
-cat out/logs/goudacell_jupyter-*.out
+export SBATCH_PARTITION=<gpu-partition>   # see: sinfo -o "%P %G"
+sbatch scripts/jupyter_gpu.sh             # from the repo root
+cat out/logs/goudacell_jupyter-*.out      # the Jupyter URL
 ```
 
-The SLURM scripts request one GPU (`--gres=gpu:1`) but no partition: set it with
-`SBATCH_PARTITION` as above or `sbatch --partition=<gpu-partition> ...`. They activate the
-`goudacell` conda env; set `GOUDACELL_ENV` to use another env name.
+Open `notebooks/segmentation.ipynb`, then:
 
-Open the notebook at `notebooks/segmentation.ipynb` and:
-1. Set your image directory and file pattern
-2. Choose segmentation mode: `"nuclei"`, `"cells"`, or `"dual"`
-3. Adjust parameters (diameter, thresholds) using the sweep cells
-4. Run feature extraction (optional)
-5. Generate batch config when happy with results
+1. Point it at your images.
+2. Pick a mode.
+3. Sweep diameters and thresholds on previews.
+4. Optionally add secondary objects and features.
+5. **Generate config**. It writes `configs/<name>.yaml` next to your data folder.
 
-### 3. Run Batch Segmentation
+### 3. Run on all images
 
 ```bash
-# Use the config the notebook wrote to configs/ (run from the repo root)
-sbatch scripts/run_segmentation.sh configs/segmentation_config.yaml
+sbatch scripts/run_segmentation.sh configs/<name>.yaml
 ```
 
-`goudacell segment` keeps going when one file fails and ends with a summary of the failed
-files. It exits 1 only when no file succeeded; when some files fail it keeps the outputs of the
-others and exits 0, so check the summary at the end of the log.
+- Masks go to `masks/<name>/` and features to `features/<name>/`, both next to your data folder.
+- A failed file doesn't stop the run; the log ends with a summary of failures.
 
-### Project layout
-
-Generated artifacts are kept out of the source tree:
-
-| Folder | Contents |
-|--------|----------|
-| `data/` | Your input images |
-| `configs/` | Configs written by the notebook (`<name>.yaml`, next to your data folder) |
-| `masks/<name>/` | Masks from batch runs of the notebook's config `<name>` (next to your data folder) |
-| `features/<name>/` | Feature tables from those runs |
-| `out/logs/` | SLURM `.out` logs |
-
-Configs carry absolute input/output paths, so a config works no matter where it
-lives or where you launch from. Run `sbatch` from the repo root so `out/logs/`
-exists for the job logs.
-
-## Segmentation Modes
-
-| Mode | Output | Use case |
-|------|--------|----------|
-| `nuclei` | `*_nuclei_mask.tif` | Nuclear segmentation only |
-| `cells` | `*_mask.tif` | Cell segmentation only |
-| `dual` | `*_nuclei_mask.tif` + `*_cell_mask.tif` | Both nuclei and cells |
-
-## Feature Extraction
-
-Extract CellProfiler-equivalent features from segmented images (~100+ features per compartment):
-
-- **Intensity**: mean, std, min, max, median, quartiles, edge intensities
-- **Shape**: area, perimeter, solidity, eccentricity, Zernike/Hu moments
-- **Texture**: Haralick (13), PFTAS (54)
-- **Distribution**: radial intensity distribution
-- **Correlation**: channel correlation, colocalization metrics
-- **Neighbors**: counts, distances, angles
-- **Foci**: count and area per channel (optional, `feature_extraction.foci_channel`)
-- **Custom**: your own per-cell measurements (`ui.set_custom_features([...])` in the notebook)
-
-With secondary-object detection on (dual mode), each image also gets a
-`*_second_obj_mask.tif`, a per-object `*_second_obj_features.csv`, and per-cell object
-counts/areas merged into the main feature table.
-
-### CellProfiler backend (headless)
-
-`feature_extraction.method: cellprofiler` measures each image's masks with a real
-CellProfiler pipeline, run headless, instead of the built-in extractor.
-
-#### Why a second conda env
-
-CellProfiler 4.2 needs Python 3.9 and numpy<2, and goudacell needs Python ≥3.10 and
-numpy≥2, so the two can't share an env. goudacell never imports CellProfiler: it runs the
-`cellprofiler` command from a separate env as a subprocess. You keep working (notebook
-kernel, CLI) in the `goudacell` env, and only need the CellProfiler env to exist.
-
-#### 1. Create the CellProfiler env (once)
-
-From the repo root:
+### 4. Check the result in the labeler
 
 ```bash
-bash scripts/setup_cellprofiler_env.sh
+goudacell labels from-run configs/<name>.yaml labels/<name>/
 ```
 
-This creates the conda env `goudacell_cp` from `envs/cellprofiler.yml` (CellProfiler
-4.2.8.1, Python 3.9 and Java, from conda-forge and bioconda) and checks it. If the env
-already exists, the script only checks it. The solve is heavy, so on a shared cluster run
-the script on a compute node. It takes a few minutes with the libmamba solver. If you'd
-rather run conda yourself, this is the equivalent command:
+The labeler runs in a browser on your own computer, so the files go there and back. The command
+prints these lines with the cluster host and folder filled in (add `user@` before the host if
+your cluster login differs from your computer's):
 
 ```bash
-conda env create --solver=libmamba -f envs/cellprofiler.yml
+scp cluster:/path/to/labels/<name>/<name>_labeler.html .     # on your computer
+# open it, check or fix outlines, press Export labels -> ~/Downloads/<name>_labels_<date>.zip
+scp ~/Downloads/<name>_labels_*.zip cluster:/path/to/labels/<name>/   # back to the cluster
+goudacell labels read labels/<name>/<name>_labels_*.zip labels/<name>/corrected/   # on the cluster
 ```
 
-conda ≥23.10 uses libmamba by default. On an older conda, install the solver into base
-with `conda install -n base -c conda-forge conda-libmamba-solver`. If you can't install
-it, drop `--solver=libmamba`: the classic solver still works but can take a very long time.
+You can also send the HTML to whoever knows the images and have them email the zip back. If the
+outlines look wrong, go back to step 2. See [Labeler](#labeler).
 
-#### 2. Check it
+## Outputs
+
+| Mode | Masks | Features |
+|---|---|---|
+| `nuclei` | `*_nuclei_mask.tif` | `*_features.csv` |
+| `cells` | `*_mask.tif` | `*_features.csv` |
+| `dual` | `*_nuclei_mask.tif`, `*_cell_mask.tif` | `*_features.csv` (nucleus, cell, cytoplasm) |
+| + secondary objects | `*_second_obj_mask.tif` | `*_second_obj_features.csv`, plus per-cell counts in `*_features.csv` |
+
+- Each mask has a `.meta.json` saying how it was made.
+- Features cover intensity, shape, texture (Haralick, PFTAS), radial distribution, channel
+  correlation, neighbours and foci, plus custom per-cell measurements
+  (`ui.set_custom_features([...])`).
+
+## Labeler
+
+The labeler is one HTML file. It shows tiles of your images with a model's outlines on top, and
+opens in any browser with no install, account or network.
+
+### Making one
 
 ```bash
-conda run -n goudacell_cp cellprofiler --version   # prints 4.2.8.1 (after some warnings)
+goudacell labels from-run configs/<name>.yaml labels/<name>/ [options]
 ```
 
-#### 3. Use it
+| Option | Default | |
+|---|---|---|
+| `--objects` | `cells` | `cells` (nuclei in nuclei mode; nuclei shown as reference in dual mode), or `second_objs` (cells shown as reference) |
+| `--n-tiles` | 3 | Tiles per image, at full resolution, in windows with a typical object count |
+| `--tile-px` | 512 | Tile size in pixels |
+| `--max-fields` | all | Use at most this many images |
+| `--um-per-px` | none | Pixel size, for a µm scale bar |
 
-Select the `cellprofiler` method in the notebook, or in the config:
+It writes `<name>_labeler.html` (the file to open or send) and `<name>.json` (the pack; keep it
+for a next round).
 
-```yaml
-feature_extraction:
-  enabled: true
-  method: cellprofiler
-```
+### Using it
 
-Nothing else is needed. goudacell looks for CellProfiler in this order:
+Magenta lines are the outlines to check. Yellow lines are reference outlines. Press **?** for
+help.
 
-1. `cellprofiler_cmd` in the config (the notebook's "CP command" field), if set;
-2. the `GOUDACELL_CELLPROFILER` environment variable;
-3. a `cellprofiler` command on your PATH;
-4. the `goudacell_cp` conda env, found through conda without activating it.
+| Problem | Fix | Key |
+|---|---|---|
+| Not an object | Select it, then Delete | `v`, Del |
+| One object in pieces | Merge, then click each piece | `m` |
+| Two objects in one outline | Split: drag a line through it | `s` |
+| Missed object | Draw around it (double-click to close), or Brush | `w`, `b` |
+| Outline too big / gap inside | Erase / Fill | `e`, `f` |
 
-Before running, goudacell checks the command with `cellprofiler --version`. It must be
-CellProfiler 4.2.x; if not, the notebook and the CLI stop with an error that says which
-command was found and what to do. To use a CellProfiler installed some other way (another
-env name, a module, a container wrapper), point goudacell at its executable:
+- **Accept tile** (`c`) when every object has one correct outline, then go to the next tile (`n`).
+- Other keys: `z` undo, `p` previous tile, `[` `]` brush size, hold `h` to hide outlines.
+- **Start this tile from** picks which model to correct. Display controls change only the view.
+- Work autosaves in that browser. **Export labels (.zip)** saves every edited or accepted tile to
+  Downloads; copy it back to the cluster as in [step 4](#4-check-the-result-in-the-labeler).
+
+### Reading labels back
 
 ```bash
-export GOUDACELL_CELLPROFILER=/path/to/cellprofiler-env/bin/cellprofiler
+goudacell labels read labels.zip corrected/                      # <tile_id>.tif masks + labels.json
+goudacell labels next run-cells.json labels.zip run-cells_r2.json   # next round starts from the labels
+goudacell labels html run-cells_r2.json run-cells_r2_labeler.html
 ```
 
-or set `cellprofiler_cmd: /path/to/cellprofiler-env/bin/cellprofiler` in the config.
+`labels.json` gives each tile's position in its image, whether it was accepted, the model it
+started from, and how the masks were made. `labels read` also flags objects in several pieces or
+under `--min-area` px.
 
-#### The pipeline
+### Several models, or masks from elsewhere
 
-Without a `pipeline_file`, goudacell runs its default pipeline
-(`src/goudacell/data/goudacell_default.cppipe`, filled in for your channels and masks).
-It runs these modules:
+To compare models on the same tiles, write a spec and run `goudacell labels pack spec.json
+pack.json`, then `goudacell labels html pack.json labeler.html`:
 
-- MeasureObjectIntensity
-- MeasureObjectSizeShape (with Zernike)
-- MeasureTexture (scale 3)
-- MeasureColocalization (within objects, all channel pairs)
-- MeasureObjectNeighbors (adjacent nuclei and cells)
-- ExportToSpreadsheet
+```json
+{
+  "pack_id": "my-cells", "name": "My cells", "object": "cell",
+  "channels": [{"key": "cyto", "name": "Membrane", "color": "#4fd17a"},
+               {"key": "dapi", "name": "DAPI", "color": "#5a8cff"}],
+  "prefill_models": [{"key": "cpsam", "name": "Cellpose-SAM"}, {"key": "cyto3", "name": "cyto3"}],
+  "fields": [{"id": "A1", "image": "images/A1.tif", "channels": {"cyto": 1, "dapi": 0},
+              "um_per_px": 0.65, "tile_px": 512, "n_tiles": 3, "split": "train",
+              "prefills": {"cpsam": "masks/A1_cpsam.tif", "cyto3": ["masks/A1.npz", "cyto3"]},
+              "reference": "masks/A1_nuclei.tif"}]
+}
+```
 
-The Texture, Correlation and Neighbors switches turn their modules off. To substitute your
-own pipeline, set `pipeline_file` (the notebook's "CP pipeline" field) to a `.cppipe`. As a
-starting point, `goudacell.features_cellprofiler.default_pipeline(["DAPI", "GFP"])` returns
-the default's text for your channels; save it as a `.cppipe` and open it in the CellProfiler
-GUI.
+Packs need a `.meta.json` next to each mask. `goudacell segment` writes them; for your own masks,
+call `goudacell.labels.write_meta(path, packages=[...], **params)`. All spec keys are documented
+in `goudacell.labels.build_pack`.
 
-For each image, goudacell writes one input folder:
+## CellProfiler backend
 
-- every channel as `<channel name>.tif` (the `channel_names`);
-- the masks as `nuclei_mask.tif`, `cell_mask.tif` and `cytoplasm_mask.tif`.
+`feature_extraction.method: cellprofiler` measures masks with real CellProfiler 4.2 (headless)
+instead of the built-in extractor. CellProfiler needs Python 3.9 and numpy<2, so it lives in its
+own env, and goudacell calls it as a subprocess:
 
-It then runs `cellprofiler -c -r -p <pipeline> -i <input> -o <output>`. A pipeline of your
-own must follow the same layout:
+```bash
+bash scripts/setup_cellprofiler_env.sh             # creates goudacell_cp (run on a compute node)
+conda run -n goudacell_cp cellprofiler --version   # 4.2.8.1; warnings are harmless
+```
 
-- In NamesAndTypes, assign each channel file as a grayscale image, and the masks as
-  **Objects** named `Nuclei`, `Cells` and `Cytoplasm`.
-- Add the Measure modules you want.
-- End with ExportToSpreadsheet (CSV, one file per object).
+Then select `cellprofiler` in the notebook or config. goudacell looks for CellProfiler in this
+order:
 
-goudacell joins those three object tables on the mask `label`. The columns are
-`nucleus_`/`cell_`/`cytoplasm_` plus CellProfiler's names (e.g.
-`cell_Intensity_MeanIntensity_GFP`), with intensities scaled to 0–1. CellProfiler gets
-`cellprofiler_timeout` seconds per image (default 3600; `null` for no limit) before it is
-killed and the image fails with an error naming that setting; raise it for large tiles or
-heavy pipelines. A pipeline that loads a
-mask the mode doesn't produce (e.g. `Cells` in nuclei mode) finds no image set and fails
-with the list of staged files. `pytest tests/test_cellprofiler_backend.py` runs a minimal
-pipeline and the default one with the CellProfiler it finds, and skips those tests when it
-finds none.
+1. `cellprofiler_cmd` in the config;
+2. `$GOUDACELL_CELLPROFILER`;
+3. `cellprofiler` on PATH;
+4. the `goudacell_cp` env.
 
-#### Troubleshooting
+**Pipeline:** the default (`src/goudacell/data/goudacell_default.cppipe`) measures intensity,
+size/shape, texture, colocalization and neighbours. To use your own pipeline, set
+`pipeline_file`; `goudacell.features_cellprofiler.default_pipeline([...])` gives a starting point.
+Your pipeline must:
 
-- **"this notebook runs in the `goudacell` env…"**: the notebook kernel is the CellProfiler
-  env. Switch the kernel to `goudacell`.
-- **Solver slow or hanging**: use libmamba (see step 1); the classic solver can run for a
-  very long time on this recipe.
-- **SSL/certificate errors while solving or downloading**: this is usually a proxy or an
-  outdated CA bundle. Try `conda update -n base ca-certificates certifi`, or point conda at
-  your institution's CA bundle with `conda config --set ssl_verify /path/to/ca-bundle.crt`.
-  If a separately installed `mamba` fails this way, use `conda ... --solver=libmamba`
-  instead.
-- **Java not found / "JVM" errors when CellProfiler reads images**: the env needs its own
-  Java. Run `conda install -n goudacell_cp -c conda-forge openjdk`.
-- **Wrong CellProfiler version**: goudacell supports 4.2.x. Check which command it found
-  (the error names it), unset or fix `GOUDACELL_CELLPROFILER`/`cellprofiler_cmd`, or rebuild
-  the env with `conda env remove -n goudacell_cp` and rerun the setup script.
-- **Warnings on `cellprofiler --version`** (pkg_resources, SciPy/NumPy version) are harmless.
+- load the channel files `<channel>.tif` as grayscale images;
+- load `nuclei_mask.tif`, `cell_mask.tif` and `cytoplasm_mask.tif` as objects named `Nuclei`,
+  `Cells` and `Cytoplasm`;
+- end with ExportToSpreadsheet.
 
-## Which Cellpose Version?
+Each image gets `cellprofiler_timeout` seconds (default 3600).
 
-`.[cellpose]` installs both, as brieflow does, and the model name picks the version:
+**If it fails:**
 
-| Version | Package | Models | Use for |
-|---------|---------|--------|---------|
-| Cellpose 3.1.0 | `cellpose3` | `cyto3`, `cyto2`, `cyto`, `nuclei` | Round cells (most common) |
-| Cellpose 4 | `cellpose` | `cpsam` | Irregular/complex shapes |
+- **Slow solve:** use `--solver=libmamba`.
+- **Java/JVM errors:** `conda install -n goudacell_cp -c conda-forge openjdk`.
+- **Wrong version:** fix `cellprofiler_cmd` or `GOUDACELL_CELLPROFILER`.
 
-A path to a custom trained model runs on the version whose network the weights file holds.
-In dual mode nuclei are segmented with `cpsam` next to `cpsam` cells, else with `nuclei`.
+## Reference
 
-## File Formats Supported
-
-- TIFF (`.tif`, `.tiff`)
-- Nikon ND2 (`.nd2`)
-- DeltaVision (`.dv`)
+- **Cellpose version:** the model name picks it. `cyto3`, `cyto2`, `cyto` and `nuclei` run on
+  Cellpose 3.1.0; `cpsam` runs on Cellpose 4. A custom model runs on the version its weights
+  were trained with. In dual mode, nuclei use `cpsam` next to `cpsam` cells, else `nuclei`.
+- **Formats:** TIFF, Nikon ND2, DeltaVision (`.dv`), OME-Zarr.
+- **Slurm scripts:** they request one GPU and no partition. Set `SBATCH_PARTITION` or pass
+  `--partition`. They activate the `goudacell` env; `GOUDACELL_ENV` picks another.
+- **Upgrading from 0.3:** masks and features changed in 0.4; see
+  [CHANGELOG.md](CHANGELOG.md#upgrading-from-03).
 
 ## License
 
-MIT; see [LICENSE](LICENSE). `src/goudacell/brieflow/` is vendored from
-[brieflow](https://github.com/cheeseman-lab/brieflow) (MIT) and keeps brieflow's own
-[LICENSE](src/goudacell/brieflow/LICENSE), which `scripts/sync_brieflow.py` copies with the modules.
+MIT; see [LICENSE](LICENSE). `src/goudacell/brieflow/` is vendored unchanged from brieflow
+(MIT, [its LICENSE](src/goudacell/brieflow/LICENSE)) by `scripts/sync_brieflow.py`.

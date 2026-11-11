@@ -25,6 +25,35 @@ def _combine_feature_tables(frames):
     return combined[cols]
 
 
+def _record_mask(path, cfg, config, input_file, kind):
+    """Write the provenance record a labeling pack needs next to a saved mask."""
+    from dataclasses import asdict
+
+    from goudacell.labels import write_meta
+
+    if kind == "second_objs":
+        params = cfg.secondary_objects.to_dict()
+    elif cfg.mode == "dual":
+        params = dict(asdict(cfg.dual), reconcile=cfg.reconcile)
+    else:
+        params = dict(
+            model=cfg.model,
+            diameter=cfg.diameter,
+            flow_threshold=cfg.flow_threshold,
+            cellprob_threshold=cfg.cellprob_threshold,
+            channel_to_segment=cfg.channel_to_segment,
+        )
+    params["remove_edge_cells"] = cfg.remove_edge_cells
+    write_meta(
+        path,
+        packages=["goudacell", "cellpose", "numpy", "scikit-image"],
+        method=f"goudacell segment run ({cfg.mode} mode, {kind})",
+        image=str(input_file),
+        config=str(Path(config).resolve()),
+        params=params,
+    )
+
+
 def _extract_features_for(fe, image, nuclei_masks, cell_masks):
     """Run feature extraction for one image using a FeatureExtractionParams."""
     from goudacell.brieflow.phenotype.custom_features import load_custom_features
@@ -160,12 +189,16 @@ def segment(
                     nuclei_path, cell_path = cfg.get_dual_output_paths(input_file)
                     save_mask(nuclei_masks, nuclei_path)
                     save_mask(cell_masks, cell_path)
+                    _record_mask(nuclei_path, cfg, config, input_file, "nuclei")
+                    _record_mask(cell_path, cfg, config, input_file, "cells")
 
                     if detect_second_objs:
                         second_obj_masks, second_obj_table, _ = segment_second_objects(
                             image, nuclei_masks, cell_masks, so, cfg.gpu
                         )
-                        save_mask(second_obj_masks, cfg.get_second_obj_output_path(input_file))
+                        so_path = cfg.get_second_obj_output_path(input_file)
+                        save_mask(second_obj_masks, so_path)
+                        _record_mask(so_path, cfg, config, input_file, "second_objs")
 
                     n_nuclei = len(set(nuclei_masks.flat)) - 1
                     n_cells = len(set(cell_masks.flat)) - 1
@@ -243,6 +276,7 @@ def segment(
                     # Save output
                     output_path = cfg.get_output_path(input_file)
                     save_mask(masks, output_path)
+                    _record_mask(output_path, cfg, config, input_file, cfg.mode)
 
                     n_cells = len(set(masks.flat)) - 1  # Exclude background
                     label = "nuclei" if cfg.mode == "nuclei" else "cells"
@@ -363,6 +397,140 @@ def version() -> None:
     status = detect_gpu()
     color = "green" if status.available else "yellow"
     console.print(f"GPU: [{color}]{status.reason}[/{color}]")
+
+
+labels_app = typer.Typer(
+    help="Annotation packs: correct segmentations in a browser, read labels back."
+)
+app.add_typer(labels_app, name="labels")
+
+
+@labels_app.command("from-run")
+def labels_from_run(
+    config: Path = typer.Argument(..., help="The YAML config of a finished 'goudacell segment'"),
+    output_dir: Path = typer.Argument(..., help="Folder for the spec, pack and labeler HTML"),
+    objects: str = typer.Option("cells", help="'cells' or 'second_objs' (dual runs)"),
+    n_tiles: int = typer.Option(3, help="Tiles per field"),
+    tile_px: int = typer.Option(512, help="Tile size in pixels"),
+    um_per_px: Optional[float] = typer.Option(None, help="Pixel size in µm (for scale)"),
+    max_fields: Optional[int] = typer.Option(None, help="Use at most this many fields"),
+    return_to: Optional[str] = typer.Option(
+        None, help="host:/dir/ to copy the export back to (default: this host, OUTPUT_DIR)"
+    ),
+) -> None:
+    """Make a labeler for a segmentation run: its masks become outlines to check and correct."""
+    import json
+    import os
+    import socket
+
+    from goudacell.labels import build_html, build_pack, spec_from_run
+
+    out = output_dir.resolve()
+    host = os.environ.get("SLURM_SUBMIT_HOST") or socket.getfqdn()
+    return_to = return_to or f"{host}:{out}/"
+    try:
+        spec = spec_from_run(config, objects, n_tiles, tile_px, um_per_px, max_fields)
+        spec["return_to"] = return_to
+        pack = build_pack(spec)
+    except ValueError as err:
+        console.print(f"[red]Error: {err}[/red]", highlight=False)
+        raise typer.Exit(1)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = spec["pack_id"]
+    (output_dir / f"{stem}_spec.json").write_text(json.dumps(spec, indent=1))
+    (output_dir / f"{stem}.json").write_text(json.dumps(pack, separators=(",", ":")))
+    page = output_dir / f"{stem}_labeler.html"
+    page.write_text(build_html(pack), encoding="utf-8")
+    zips = f"{stem}_labels_*.zip"
+    console.print(
+        f"[green]Done![/green] {len(spec['fields'])} fields, {len(pack['tiles'])} tiles -> {page}\n"
+        f"On your computer: copy the labeler there, open it, label, press Export labels:\n"
+        f"  scp {host}:{out / page.name} .\n"
+        f"Copy the export back here (or have the annotator email it to you):\n"
+        f"  scp ~/Downloads/{zips} {return_to}\n"
+        f"Then, here:\n"
+        f"  goudacell labels read {out}/{zips} {out}/corrected/",
+        highlight=False,
+        soft_wrap=True,
+    )
+
+
+@labels_app.command("pack")
+def labels_pack(
+    spec: Path = typer.Argument(..., help="Pack spec (JSON): fields, channels, prefill sources"),
+    output: Path = typer.Argument(..., help="Output pack (.json)"),
+    allow_missing_meta: bool = typer.Option(
+        False, help="Build even if a mask file has no .meta.json record of how it was made"
+    ),
+) -> None:
+    """Cut native-resolution tiles from whole fields and attach every prefill."""
+    import json
+
+    from goudacell.labels import build_pack
+
+    pack = build_pack(json.loads(spec.read_text()), require_meta=not allow_missing_meta)
+    output.write_text(json.dumps(pack, separators=(",", ":")))
+    splits = {s: sum(t["split"] == s for t in pack["tiles"]) for s in ("train", "test")}
+    console.print(f"[green]Done![/green] {len(pack['tiles'])} tiles {splits} -> {output}")
+
+
+@labels_app.command("html")
+def labels_html(
+    pack: Path = typer.Argument(..., help="Pack (.json) from 'goudacell labels pack'"),
+    output: Path = typer.Argument(
+        ..., help="Self-contained labeler (.html) to send to the annotator"
+    ),
+    artifact: bool = typer.Option(False, "--artifact", help="Omit the HTML skeleton (Artifact)"),
+) -> None:
+    """Write one HTML file with the pack embedded; it opens offline and exports a zip."""
+    import json
+
+    from goudacell.labels import build_html
+
+    output.write_text(build_html(json.loads(pack.read_text()), artifact=artifact))
+    console.print(f"[green]Done![/green] {output} ({output.stat().st_size / 2**20:.1f} MiB)")
+
+
+@labels_app.command("read")
+def labels_read(
+    export: Path = typer.Argument(..., help="Zip exported from the labeler"),
+    output_dir: Path = typer.Argument(
+        ..., help="Directory for <tile_id>.tif masks and labels.json"
+    ),
+    min_area: int = typer.Option(10, help="Flag objects smaller than this (px)"),
+) -> None:
+    """Write the returned masks as TIFFs and report objects that look wrong."""
+    from goudacell.labels import read_export, write_masks
+
+    paths = write_masks(export, output_dir)
+    manifest, _, problems = read_export(export, min_area=min_area)
+    done = sum(bool(t.get("done")) for t in manifest["tiles"])
+    console.print(f"[green]Done![/green] {len(paths)} tiles ({done} accepted) -> {output_dir}")
+    pieces = sum("pieces" in note for _, _, note in problems)
+    if pieces:
+        console.print(f"  [yellow]{pieces} objects in several pieces[/yellow]")
+    if len(problems) > pieces:
+        console.print(f"  [yellow]{len(problems) - pieces} objects under {min_area} px[/yellow]")
+    for tile, label, note in problems[:5]:
+        console.print(f"    {tile} object {label}: {note}")
+
+
+@labels_app.command("next")
+def labels_next(
+    pack: Path = typer.Argument(..., help="The pack the labels were made on"),
+    export: Path = typer.Argument(..., help="Zip exported from the labeler"),
+    output: Path = typer.Argument(..., help="Next round's pack (.json)"),
+    pack_id: Optional[str] = typer.Option(None, help="New pack id (default: <old>-r2)"),
+) -> None:
+    """Make the next round's pack, starting each returned tile from the annotator's labels."""
+    import json
+
+    from goudacell.labels import next_round
+
+    new = next_round(json.loads(pack.read_text()), export, pack_id=pack_id)
+    output.write_text(json.dumps(new, separators=(",", ":")))
+    n = sum("labels" in t["prefills"] for t in new["tiles"])
+    console.print(f"[green]Done![/green] {new['pack_id']}: {n} tiles start from returned labels")
 
 
 if __name__ == "__main__":

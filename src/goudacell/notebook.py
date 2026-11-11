@@ -1549,6 +1549,15 @@ class ParameterUI:
             print(f"Features  → {features_dir}/  (the sbatch run creates this)")
             print("\nRun batch segmentation (from the repo root) with:")
             print(f"  sbatch scripts/run_segmentation.sh {config_path}")
+            labels_dir = root / "labels" / name
+            print("\nThen check and correct the masks in a browser labeler with:")
+            print(f"  goudacell labels from-run {config_path} {labels_dir}")
+            so = config.secondary_objects
+            if so is not None and so.second_obj_detection:
+                print(
+                    f"  goudacell labels from-run {config_path} {labels_dir} "
+                    "--objects second_objs"
+                )
 
     def _ipython_display_(self) -> None:
         """Display all four blocks when the object is the last cell expression."""

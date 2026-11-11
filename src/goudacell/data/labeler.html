@@ -149,7 +149,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 3px;
           <li><b>Fix only what is wrong.</b> Not a cell or junk: click it, press <kbd>Delete</kbd>. One cell cut into pieces: <b>Merge</b>. Two cells in one outline: <b>Split</b>. A missed cell: <b>Draw</b> or <b>Brush</b>. Outline too big: <b>Erase</b>.</li>
           <li><b>One cell = one outline,</b> however many nuclei it has. Tag such cells <b>Multinucleated</b>.</li>
           <li><b>Accept the tile</b> <kbd>c</kbd> when every cell has exactly one correct outline, then go to the next <kbd>n</kbd>.</li>
-          <li><b>Send the labels back:</b> press <b>Export labels</b> (top right) and send the .zip file. Your work is also kept in this browser, so you can stop and continue later.</li>
+          <li><b>Send the labels back:</b> press <b>Export labels</b> (top right) and send the .zip file.<span id="retcmd"></span> Your work is also kept in this browser, so you can stop and continue later.</li>
         </ol>
         <p class="muted" style="margin-top:4px"><span id="rule"></span></p>
         <details class="more"><summary>All tools and keys</summary>
@@ -277,7 +277,7 @@ async function exportZip() {
   if (!n) { status('Nothing to export yet. Edit a tile or mark it done first.', 'warn'); return; }
   const name = `${safe(S.pack.pack_id)}_labels_${new Date().toISOString().slice(0, 10)}.zip`;
   if (!S.dl && S.offline) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' })); a.download = name; document.body.append(a); a.click(); a.remove();
-    status(`Exported ${n} tiles as ${name} (in your Downloads folder). Email that file back.`); return; }
+    status(`Exported ${n} tiles as ${name} (in your Downloads folder). ` + (S.pack.return_to ? `Copy it back: scp ~/Downloads/${name} ${S.pack.return_to} (or email it).` : 'Email that file back.')); return; }
   if (!S.dl) { status('Saving files is not available in this view.', 'err'); return; }
   try { await S.dl.save({ filename: name, data: new Blob([zip]) }); status(`Exported ${n} tiles as ${name}.`); }
   catch (e) { if (e?.code === 'declined') status('Export cancelled.'); else status(`Export failed (${e?.code || 'error'}).`, 'err'); }
@@ -490,6 +490,7 @@ async function openPack(p, how) {
   $('eyebrow').textContent = `goudacell · ${p.object || 'object'} labels · ${p.tiles.length} tiles`;
   $('h1').textContent = p.name || p.pack_id;
   $('rule').textContent = p.instructions || '';
+  $('retcmd').textContent = p.return_to ? ` If you can reach the cluster, copy it back instead: scp ~/Downloads/${safe(p.pack_id)}_labels_*.zip ${p.return_to}` : '';
   $('refname').textContent = p.reference_name || 'Reference'; $('shrl').hidden = !S.tiles.some(t => t.ref);
   $('chans').replaceChildren(...p.channels.map(c => { const b = document.createElement('button'); b.type = 'button'; b.dataset.v = c.key;
     const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = c.color || '#fff'; b.append(sw, c.name || c.key);

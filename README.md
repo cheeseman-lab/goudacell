@@ -56,8 +56,19 @@ sbatch scripts/run_segmentation.sh configs/<name>.yaml
 goudacell labels from-run configs/<name>.yaml labels/<name>/
 ```
 
-Open the `*_labeler.html` it writes, or send it to whoever knows the images. If the outlines
-look wrong, go back to step 2. See [Labeler](#labeler).
+The labeler runs in a browser on your own computer, so the files go there and back. The command
+prints these lines with the cluster host and folder filled in (add `user@` before the host if
+your cluster login differs from your computer's):
+
+```bash
+scp cluster:/path/to/labels/<name>/<name>_labeler.html .     # on your computer
+# open it, check or fix outlines, press Export labels -> ~/Downloads/<name>_labels_<date>.zip
+scp ~/Downloads/<name>_labels_*.zip cluster:/path/to/labels/<name>/   # back to the cluster
+goudacell labels read labels/<name>/<name>_labels_*.zip labels/<name>/corrected/   # on the cluster
+```
+
+You can also send the HTML to whoever knows the images and have them email the zip back. If the
+outlines look wrong, go back to step 2. See [Labeler](#labeler).
 
 ## Outputs
 
@@ -111,7 +122,8 @@ help.
 - **Accept tile** (`c`) when every object has one correct outline, then go to the next tile (`n`).
 - Other keys: `z` undo, `p` previous tile, `[` `]` brush size, hold `h` to hide outlines.
 - **Start this tile from** picks which model to correct. Display controls change only the view.
-- Work autosaves in that browser. **Export labels (.zip)** saves every edited or accepted tile.
+- Work autosaves in that browser. **Export labels (.zip)** saves every edited or accepted tile to
+  Downloads; copy it back to the cluster as in [step 4](#4-check-the-result-in-the-labeler).
 
 ### Reading labels back
 

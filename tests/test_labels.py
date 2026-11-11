@@ -200,6 +200,9 @@ def test_from_run_cli_writes_labeler(tmp_path):
     res = CliRunner().invoke(app, ["labels", "from-run", str(config), str(out), "--tile-px", "64"])
     assert res.exit_code == 0, res.output
     assert (out / "run-cells_labeler.html").stat().st_size > 1000
+    pack = json.loads((out / "run-cells.json").read_text())
+    assert pack["return_to"].endswith(f":{out.resolve()}/") and "@" not in pack["return_to"]
+    assert f"scp ~/Downloads/run-cells_labels_*.zip {pack['return_to']}" in res.output
     res = CliRunner().invoke(
         app, ["labels", "from-run", str(config), str(out), "--objects", "second_objs"]
     )

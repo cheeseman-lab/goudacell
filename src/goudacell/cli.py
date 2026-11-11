@@ -414,14 +414,23 @@ def labels_from_run(
     tile_px: int = typer.Option(512, help="Tile size in pixels"),
     um_per_px: Optional[float] = typer.Option(None, help="Pixel size in µm (for scale)"),
     max_fields: Optional[int] = typer.Option(None, help="Use at most this many fields"),
+    return_to: Optional[str] = typer.Option(
+        None, help="host:/dir/ to copy the export back to (default: this host, OUTPUT_DIR)"
+    ),
 ) -> None:
     """Make a labeler for a segmentation run: its masks become outlines to check and correct."""
     import json
+    import os
+    import socket
 
     from goudacell.labels import build_html, build_pack, spec_from_run
 
+    out = output_dir.resolve()
+    host = os.environ.get("SLURM_SUBMIT_HOST") or socket.getfqdn()
+    return_to = return_to or f"{host}:{out}/"
     try:
         spec = spec_from_run(config, objects, n_tiles, tile_px, um_per_px, max_fields)
+        spec["return_to"] = return_to
         pack = build_pack(spec)
     except ValueError as err:
         console.print(f"[red]Error: {err}[/red]", highlight=False)
@@ -432,10 +441,17 @@ def labels_from_run(
     (output_dir / f"{stem}.json").write_text(json.dumps(pack, separators=(",", ":")))
     page = output_dir / f"{stem}_labeler.html"
     page.write_text(build_html(pack), encoding="utf-8")
+    zips = f"{stem}_labels_*.zip"
     console.print(
         f"[green]Done![/green] {len(spec['fields'])} fields, {len(pack['tiles'])} tiles -> {page}\n"
-        f"Open it in a browser (or send it); read the exported zip back with "
-        f"'goudacell labels read'."
+        f"On your computer: copy the labeler there, open it, label, press Export labels:\n"
+        f"  scp {host}:{out / page.name} .\n"
+        f"Copy the export back here (or have the annotator email it to you):\n"
+        f"  scp ~/Downloads/{zips} {return_to}\n"
+        f"Then, here:\n"
+        f"  goudacell labels read {out}/{zips} {out}/corrected/",
+        highlight=False,
+        soft_wrap=True,
     )
 
 

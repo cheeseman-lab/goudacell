@@ -218,7 +218,8 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
             ``prefills`` ({key: source}) and optional ``reference`` (e.g. nuclei). A source is a
             path or ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
             ``reference_name``, ``min_area`` (30), ``typical_percentile`` (70, also per field),
-            ``provenance`` (free-form: how the prefills were made; carried into exports), and
+            ``provenance`` (free-form: how the prefills were made; carried into exports),
+            ``return_to`` (``host:/dir/`` the labeler says to copy the export to), and
             ``params`` on each prefill model.
 
         require_meta: Refuse prefill or reference files without a ``.meta.json`` record (see
@@ -315,6 +316,7 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
         prefill_model=models[0],
         prefill_models=spec["prefill_models"],
         provenance=spec.get("provenance", {}),
+        return_to=spec.get("return_to", ""),
         fields=fields,
         tiles=tiles,
     )

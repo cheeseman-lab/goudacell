@@ -1,0 +1,571 @@
+<title>Goudacell Labeler</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+<style>
+/* Layout: pack bar on top; tile list at left, tool bars over one large canvas at right; stacks on narrow screens */
+:root {
+  --bg: #f6f7f5; --panel: #ffffff; --fg: #1d2421; --muted: #5d6963; --line: #d9ded9;
+  --accent: #2f7d5b; --bad: #a3322a; --warn: #a15c10; --stage: #0b0e0c;
+  --body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --panel: #1a201d; --fg: #e3e8e5; --muted: #9aa6a0; --line: #2c3530;
+  --accent: #6cc39a; --bad: #ef8a80; --warn: #e0a24f; --stage: #060807; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121614; --panel: #1a201d; --fg: #e3e8e5; --muted: #9aa6a0; --line: #2c3530;
+  --accent: #6cc39a; --bad: #ef8a80; --warn: #e0a24f; --stage: #060807; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--body); }
+[hidden] { display: none !important; }
+.wrap { max-width: 1400px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 18px 40px; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: end; justify-content: space-between; }
+.eyebrow { font: 600 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 24px; line-height: 1.15; margin: 4px 0 0; text-wrap: balance; }
+h2 { font-size: 16px; margin: 0; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; }
+summary { cursor: pointer; font-weight: 600; }
+.rules { display: grid; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 13.5px; max-width: 92ch; }
+.rules p { margin: 0; }
+.rules b { color: var(--fg); }
+.more { border: 0; padding: 4px 0 0; background: none; }
+.more summary { font-weight: 600; color: var(--muted); }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: var(--fg); }
+.mini { display: grid; gap: 4px; margin-bottom: 10px; }
+.mini canvas { width: 100%; height: auto; border-radius: 4px; background: var(--stage); cursor: pointer; }
+.mini .cap { font: 11.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 820px) { .start { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.drop { border: 2px dashed var(--line); border-radius: 6px; padding: 22px 14px; text-align: center; color: var(--muted); display: grid; gap: 8px; justify-items: center; }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+.muted { color: var(--muted); font-size: 13px; margin: 0; }
+.packs { display: grid; gap: 6px; }
+.pack { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; text-align: left; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; cursor: pointer; font: inherit; }
+.pack:hover { border-color: var(--muted); }
+.pack .nm { font-weight: 600; }
+.pack .meta { grid-column: 1 / -1; font: 12px var(--mono); color: var(--muted); }
+.main { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 820px) { .main { grid-template-columns: 1fr; } }
+.list { display: grid; gap: 6px; max-height: 78vh; overflow: auto; }
+.progress { font: 600 12px var(--mono); color: var(--muted); padding: 2px; }
+.item { display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; text-align: left; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; cursor: pointer; font: inherit; }
+.item:hover { border-color: var(--muted); }
+.item[aria-current="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.item .nm { font: 600 12.5px var(--mono); overflow-wrap: anywhere; }
+.item .n { font: 600 12px var(--mono); color: var(--muted); }
+.item.done .n { color: var(--accent); }
+.item .gp { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.split { white-space: nowrap; display: inline-block; font: 600 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; color: var(--muted); }
+.work { display: grid; gap: 8px; min-width: 0; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.bar label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.bar input[type=range] { width: 90px; accent-color: var(--accent); }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { font: 600 12.5px var(--body); border: 0; background: var(--panel); color: var(--fg); padding: 6px 11px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.btn { font: 600 12.5px var(--body); border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.title { font: 600 13px var(--mono); margin-right: auto; overflow-wrap: anywhere; min-width: 0; }
+.stat { font: 600 13px var(--mono); color: var(--accent); }
+.badge { font: 600 12px var(--mono); border-radius: 999px; padding: 4px 10px; border: 1px solid var(--muted); color: var(--muted); white-space: nowrap; }
+.badge.ok { border-color: var(--accent); color: var(--accent); }
+.badge.bad { border-color: var(--bad); color: var(--bad); }
+.stage { background: var(--stage); border-radius: 6px; overflow: auto; max-height: 80vh; padding: 10px; }
+canvas { display: block; max-width: none; touch-action: none; }
+.status { font: 12.5px var(--mono); color: var(--muted); min-height: 1.5em; }
+.status.err { color: var(--bad); }
+.status.warn { color: var(--warn); }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.wrap { max-width: 1900px; }
+.main { grid-template-columns: 200px minmax(0, 1fr) 290px; gap: 12px; }
+@media (max-width: 1100px) { .main { grid-template-columns: 1fr; } .side { max-height: none; } }
+.stage { height: calc(100vh - 120px); min-height: 360px; max-height: none; padding: 8px; display: grid; place-items: center; }
+.stage canvas { margin: auto; }
+.list { max-height: calc(100vh - 380px); }
+.side { display: grid; gap: 10px; align-content: start; max-height: calc(100vh - 96px); overflow: auto; }
+.sec { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 8px; }
+.sec h3 { font: 600 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 2px 0 0; }
+.sec label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.sec label.chk { justify-content: flex-start; gap: 6px; }
+.sec input[type=range] { width: 130px; accent-color: var(--accent); }
+.sec .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sec .title { font-size: 12px; margin: 0; }
+.seg.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); }
+.seg.grid4 button { border-left: 0; border-top: 1px solid var(--line); }
+.seg.grid4 button:nth-child(-n+4) { border-top: 0; }
+.seg.grid4 button:not(:nth-child(4n+1)) { border-left: 1px solid var(--line); }
+.seg.wrapbtn button { flex: 1 1 auto; }
+.btn.big { padding: 10px; font-size: 14px; }
+.overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); display: grid; place-items: center; z-index: 20; padding: 16px; }
+.dialog { background: var(--panel); color: var(--fg); border-radius: 8px; padding: 18px 22px; max-width: 760px; max-height: 88vh; overflow: auto; display: grid; gap: 10px; }
+.dialog .rules { margin-top: 0; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <span class="eyebrow" id="eyebrow">goudacell · segmentation ground truth</span>
+      <h1 id="h1">Label a tile pack</h1>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="badge" id="badge">Connecting…</span>
+      <button class="btn" type="button" id="helpbtn" hidden>? How to label</button>
+      <button class="btn" type="button" id="share" hidden>Share pack with annotators</button>
+      <button class="btn primary" type="button" id="export" hidden>Export labels (.zip)</button>
+      <button class="btn" type="button" id="close" hidden>Change pack</button>
+    </div>
+  </header>
+
+  <section class="start" id="start">
+    <div class="card">
+      <h2>Shared packs</h2>
+      <p class="muted" id="packsmsg">Packs the page owner shared appear here. Pick one to start or continue labelling.</p>
+      <div class="packs" id="packs"></div>
+    </div>
+    <div class="card">
+      <h2>Open a pack file</h2>
+      <p class="muted">Only needed for a pack that has not been shared here yet. A pack is a <code>.json</code> file made by goudacell; opening it keeps it on your computer and only your labels are saved.</p>
+      <label class="drop" id="drop" for="file">
+        <span><b>Drop a tile pack here</b> or choose a file</span>
+        <input id="file" type="file" accept=".json,application/json">
+      </label>
+      <div class="status" id="loadmsg"></div>
+    </div>
+  </section>
+
+  <div class="overlay" id="help" hidden role="dialog" aria-modal="true" aria-labelledby="helptitle">
+    <div class="dialog">
+      <h2 id="helptitle">How to label</h2>
+      <div class="rules">
+        <ol class="steps">
+          <li><b>Look at the tile.</b> Magenta lines are a model's cell outlines, yellow lines are nuclei (for orientation only). The map at the top left shows where the tile sits in the whole image; the scale bar is in µm.</li>
+          <li><b>Fix only what is wrong.</b> Not a cell or junk: click it, press <kbd>Delete</kbd>. One cell cut into pieces: <b>Merge</b>. Two cells in one outline: <b>Split</b>. A missed cell: <b>Draw</b> or <b>Brush</b>. Outline too big: <b>Erase</b>.</li>
+          <li><b>One cell = one outline,</b> however many nuclei it has. Tag such cells <b>Multinucleated</b>.</li>
+          <li><b>Accept the tile</b> <kbd>c</kbd> when every cell has exactly one correct outline, then go to the next <kbd>n</kbd>.</li>
+          <li><b>Send the labels back:</b> press <b>Export labels</b> (top right) and send the .zip file. Your work is also kept in this browser, so you can stop and continue later.</li>
+        </ol>
+        <p class="muted" style="margin-top:4px"><span id="rule"></span></p>
+        <details class="more"><summary>All tools and keys</summary>
+        <p><b>Select</b> <kbd>v</kbd> click an object. <b>Merge</b> <kbd>m</kbd> click the pieces of one object in turn. <b>Split</b> <kbd>s</kbd> drag a line through an object that holds two. <b>Draw</b> <kbd>w</kbd> click around a missing object, then double-click or press <kbd>Enter</kbd>. <b>Brush</b> <kbd>b</kbd> paints the selected object, or a new one if nothing is selected. <b>Erase</b> <kbd>e</kbd> removes pixels. <b>Fill</b> <kbd>f</kbd> fills an enclosed gap. Brush and fill never paint over a neighbour unless you hold <kbd>Shift</kbd>. <kbd>Delete</kbd> removes the selected object. If the other model's outlines look closer for a tile, switch to them first with <b>Start from</b>. The Display controls change only the view, never the labels.</p>
+        <p>Tags: <span id="tagkeys"></span> <kbd>0</kbd> clears. Other keys: <kbd>z</kbd> undo, <kbd>n</kbd>/<kbd>p</kbd> next or previous tile, hold <kbd>h</kbd> to hide outlines, <kbd>[</kbd> <kbd>]</kbd> brush size.</p>
+        </details>
+      </div>
+      <div style="display:flex;justify-content:flex-end"><button class="btn primary" type="button" id="helpok">Got it</button></div>
+    </div>
+  </div>
+
+  <div class="main" id="main" hidden>
+    <nav>
+      <div class="mini" id="minibox" hidden><canvas id="mini" width="10" height="10" aria-label="Where this tile sits in the whole image"></canvas><span class="cap" id="minicap"></span></div>
+      <div class="progress" id="progress"></div>
+      <div class="list" id="list"></div>
+    </nav>
+    <div class="work">
+      <div class="stage"><canvas id="cv" width="10" height="10" aria-label="Tile with outlines to correct"></canvas></div>
+      <div class="status" id="status"></div>
+    </div>
+    <aside class="side">
+      <section class="sec">
+        <span class="title" id="title">—</span>
+        <span class="stat" id="stat"></span>
+        <button class="btn primary big" type="button" id="done">Accept tile</button>
+      </section>
+      <section class="sec">
+        <h3>Edit</h3>
+        <div class="seg grid4" id="tools" role="group" aria-label="Tool">
+          <button type="button" data-v="select">Select</button><button type="button" data-v="merge">Merge</button><button type="button" data-v="split">Split</button><button type="button" data-v="draw">Draw</button><button type="button" data-v="brush">Brush</button><button type="button" data-v="erase">Erase</button><button type="button" data-v="fill">Fill</button>
+        </div>
+        <label for="rad">Brush size <input id="rad" type="range" min="1" max="12" step="1" value="3"></label>
+        <div class="row"><button class="btn" type="button" id="del">Delete</button><button class="btn" type="button" id="undo">Undo</button></div>
+      </section>
+      <section class="sec" id="tagbar">
+        <h3>Tag selected cell</h3>
+        <div class="seg wrapbtn" id="tags" role="group" aria-label="Tag"></div>
+      </section>
+      <section class="sec" id="basebar">
+        <h3>Start this tile from</h3>
+        <div class="seg" id="bases" role="group" aria-label="Starting outlines"></div>
+        <label for="cmp" class="chk" title="Draw the other model's outlines in cyan, for comparison only"><input id="cmp" type="checkbox"> Show <span id="cmpname">other model</span> (cyan)</label>
+      </section>
+      <section class="sec">
+        <h3>Display</h3>
+        <div class="seg wrapbtn" id="chans" role="group" aria-label="Channels"></div>
+        <div class="row"><label for="zoom">Zoom <input id="zoom" type="range" min="0.25" max="4" step="0.05" value="1"></label><button type="button" class="btn" id="fit" title="Fit the whole tile in view">Fit</button></div>
+        <label for="bright">Brightness <input id="bright" type="range" min="0.5" max="4" step="0.05" value="1"></label>
+        <label for="gamma" title="Lower values lift dim signal such as faint cell edges">Dim signal <input id="gamma" type="range" min="0" max="1" step="0.02" value="0.4"></label>
+        <label for="black" title="Raise to darken the background between cells">Background <input id="black" type="range" min="-0.1" max="0.4" step="0.01" value="0"></label>
+        <div class="row"><label for="shr" id="shrl" class="chk"><input id="shr" type="checkbox" checked> <span id="refname">Reference</span></label><label for="fillv" class="chk"><input id="fillv" type="checkbox"> Fill view</label></div>
+        <button type="button" class="btn" id="dispreset" title="Reset brightness, dim signal and background">Reset view</button>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const S = { pack: null, tiles: [], idx: 0, L: {}, img: {}, tool: 'select', sel: 0, on: {}, db: null, uid: null, dl: null, assets: null, canEdit: false, timers: {}, st: {}, bm: {}, thumbs: {}, fit: true, hide: false, drag: null, poly: null, connected: false };
+const cv = $('cv'), ctx = cv.getContext('2d');
+const KEY_OK = /[^A-Za-z0-9_\-.:@+]/g;
+const safe = s => String(s).replace(KEY_OK, '_').slice(0, 60);
+
+function badge(t, c) { $('badge').textContent = t; $('badge').className = 'badge' + (c ? ' ' + c : ''); }
+function status(t, cls) { $('status').textContent = t; $('status').className = 'status' + (cls ? ' ' + cls : ''); }
+function rle(m) { const o = []; let i = 0; while (i < m.length) { const v = m[i]; let j = i + 1; while (j < m.length && m[j] === v) j++; if (v) o.push(i, j - i, v); i = j; } return o; }
+function unrle(r, n) { const m = new Uint16Array(n); for (let k = 0; k + 2 < r.length; k += 3) m.fill(r[k + 2], r[k], r[k] + r[k + 1]); return m; }
+function cur() { return S.tiles[S.idx]; }
+function maxOf(m) { let v = 0; for (let i = 0; i < m.length; i++) if (m[i] > v) v = m[i]; return v; }
+function docId(t) { return safe(S.pack.pack_id) + '~' + safe(t.id) + '~' + S.uid; }
+function lsKey() { return 'labeler_' + safe(S.pack.pack_id); }
+function lab(id) {
+  const t = S.tiles.find(x => x.id === id);
+  if (!S.L[id]) { const base = defBase(); const m = unrle((base && t.prefills?.[base]) || t.prefill || [], t.h * t.w); S.L[id] = { m, base, tags: {}, next: maxOf(m) + 1, done: false, edited: false, hist: [], saved: true, t: 0 }; }
+  return S.L[id];
+}
+function snapshot(id) { const l = lab(id); return { rle: rle(l.m), base: l.base, tags: l.tags, next: l.next, done: l.done, edited: l.edited, t: l.t }; }
+function defBase() { return S.pack.prefill_models?.[0]?.key || ''; }
+function baseMask(t, k) { const c = S.bm[t.id + '|' + k]; if (c) return c; const r = t.prefills?.[k]; return r ? (S.bm[t.id + '|' + k] = unrle(r, t.h * t.w)) : null; }
+function setBase(k) { const t = cur(), l = lab(t.id); if (!t.prefills?.[k] || l.base === k && !l.edited) return; pushHist(t.id);
+  l.m = baseMask(t, k).slice(); l.tags = {}; l.next = maxOf(l.m) + 1; l.base = k; S.sel = 0;
+  const nm = S.pack.prefill_models.find(x => x.key === k)?.name || k; status(`Tile reset to ${nm} outlines.${l.hist.length ? ' Press z to undo.' : ''}`); changed(t.id); }
+function backup() { try { const o = {}; for (const t of S.tiles) if (S.L[t.id] && (S.L[t.id].edited || S.L[t.id].done)) o[t.id] = snapshot(t.id); localStorage.setItem(lsKey(), JSON.stringify(o)); } catch (e) {} }
+function restore(id, s) { const t = S.tiles.find(x => x.id === id); if (!t) return; const l = lab(id); l.m = unrle(s.rle || [], t.h * t.w); l.tags = s.tags || {}; l.next = Math.max(s.next || 0, maxOf(l.m) + 1); l.done = !!s.done; l.edited = !!s.edited; l.t = s.t || 0; l.base = s.base || defBase(); }
+function pushHist(id) { const l = lab(id); l.hist.push({ m: l.m.slice(), tags: { ...l.tags }, next: l.next, base: l.base }); if (l.hist.length > 40) l.hist.shift(); }
+function changed(id, edit = true) { const l = lab(id); if (edit) l.edited = true; l.t = Date.now(); l.saved = false; backup(); renderList(); draw(); save(id); }
+
+function noSave(detail) { S.connected = false; badge('Not saving', 'bad'); status((detail ? detail + ' ' : '') + 'Your labels are kept in this browser but are not reaching the shared store. Ask the page owner to share it with you as Editor, then reload; or use "Export labels" and send the file.', 'err'); }
+function save(id) {
+  if (S.offline) { badge('Saved in this browser', 'ok'); return; }
+  if (!S.db || !S.uid || !S.connected) { if (!S.connected && S.db === null) noSave(); return; }
+  clearTimeout(S.timers[id]); badge('Saving…');
+  S.timers[id] = setTimeout(async () => {
+    const t = S.tiles.find(x => x.id === id), l = lab(id);
+    const body = { pack_id: S.pack.pack_id, tile_id: id, annotator: S.uid, split: t.split || '', h: t.h, w: t.w,
+      rle: rle(l.m), base: l.base || '', tags: l.tags, next: l.next, n_objects: new Set(l.m).size - (l.m.includes(0) ? 1 : 0), edited: l.edited, done: l.done, updated: new Date().toISOString() };
+    try { await S.db.doc('labels/' + docId(t)).set(body); delete S.timers[id]; l.saved = true; backup(); if (!Object.keys(S.timers).length) badge('Saved', 'ok'); }
+    catch (e) { delete S.timers[id]; if (e?.code === 'unavailable') { setTimeout(() => save(id), 1000 + Math.random() * 1000); return; } noSave(`Not saved (${e?.code || 'error'}).`); }
+  }, 800);
+}
+
+// ---- export: uint16 TIFF masks + per-object tags in one zip ----
+function tiff16(m, w, h) {
+  const n = 10, ifd = 2 + n * 12 + 4, off = 8 + ifd + (ifd % 2), buf = new ArrayBuffer(off + m.length * 2), v = new DataView(buf);
+  v.setUint16(0, 0x4949, true); v.setUint16(2, 42, true); v.setUint32(4, 8, true); v.setUint16(8, n, true);
+  const E = [[256, 4, w], [257, 4, h], [258, 3, 16], [259, 3, 1], [262, 3, 1], [273, 4, off], [277, 3, 1], [278, 4, h], [279, 4, m.length * 2], [339, 3, 1]];
+  E.forEach(([tag, type, val], k) => { const p = 10 + k * 12; v.setUint16(p, tag, true); v.setUint16(p + 2, type, true); v.setUint32(p + 4, 1, true); type === 3 ? v.setUint16(p + 8, val, true) : v.setUint32(p + 8, val, true); });
+  v.setUint32(10 + n * 12, 0, true);
+  const px = new Uint16Array(buf, off, m.length); px.set(m); return new Uint8Array(buf);
+}
+function buildExport() {
+  const files = {}, rows = [];
+  for (const t of S.tiles) { const l = S.L[t.id]; if (!l || !(l.edited || l.done)) continue;
+    files['masks/' + safe(t.id) + '.tif'] = tiff16(l.m, t.w, t.h);
+    rows.push({ tile_id: t.id, file: 'masks/' + safe(t.id) + '.tif', split: t.split || '', base: l.base || '', done: l.done, edited: l.edited, n_objects: new Set(l.m).size - (l.m.includes(0) ? 1 : 0), tags: l.tags, source: t.source || null }); }
+  const manifest = { format: 'goudacell-labels', version: 1, pack_id: S.pack.pack_id, pack_name: S.pack.name || '', object: S.pack.object || 'object', prefill_models: S.pack.prefill_models || [], provenance: S.pack.provenance || {}, min_area: S.pack.min_area, fields: Object.fromEntries(Object.entries(S.pack.fields || {}).map(([k, f]) => [k, { image: f.image, image_sha256: f.image_sha256, channels: f.channels, um_per_px: f.um_per_px, segmentation: f.segmentation }])), annotator: S.uid || 'local', exported: new Date().toISOString(), tiles: rows };
+  files['labels.json'] = fflate.strToU8(JSON.stringify(manifest, null, 1));
+  return { zip: fflate.zipSync(files, { level: 6 }), n: rows.length };
+}
+async function exportZip() {
+  if (!window.fflate) { status('The export library did not load. Reload the page and try again.', 'err'); return; }
+  const { zip, n } = buildExport();
+  if (!n) { status('Nothing to export yet. Edit a tile or mark it done first.', 'warn'); return; }
+  const name = `${safe(S.pack.pack_id)}_labels_${new Date().toISOString().slice(0, 10)}.zip`;
+  if (!S.dl && S.offline) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' })); a.download = name; document.body.append(a); a.click(); a.remove();
+    status(`Exported ${n} tiles as ${name} (in your Downloads folder). Email that file back.`); return; }
+  if (!S.dl) { status('Saving files is not available in this view.', 'err'); return; }
+  try { await S.dl.save({ filename: name, data: new Blob([zip]) }); status(`Exported ${n} tiles as ${name}.`); }
+  catch (e) { if (e?.code === 'declined') status('Export cancelled.'); else status(`Export failed (${e?.code || 'error'}).`, 'err'); }
+}
+
+// ---- edits ----
+function comps(t, m, id) {
+  const seen = new Uint8Array(m.length), out = [];
+  for (let i = 0; i < m.length; i++) { if (m[i] !== id || seen[i]) continue; const c = [], st = [i]; seen[i] = 1;
+    while (st.length) { const q = st.pop(), y = (q / t.w) | 0, x = q % t.w; c.push(q);
+      for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const yy = y + dy, xx = x + dx; if (yy < 0 || xx < 0 || yy >= t.h || xx >= t.w) continue; const j = yy * t.w + xx; if (!seen[j] && m[j] === id) { seen[j] = 1; st.push(j); } } }
+    out.push(c); }
+  return out.sort((a, b) => b.length - a.length);
+}
+function prune(l) { const ids = new Set(l.m); for (const k of Object.keys(l.tags)) if (!ids.has(+k)) delete l.tags[k]; }
+function mergeInto(a, b) { if (!a || !b || a === b) return; const t = cur(), l = lab(t.id); pushHist(t.id); for (let i = 0; i < l.m.length; i++) if (l.m[i] === b) l.m[i] = a; if (l.tags[b] && !l.tags[a]) l.tags[a] = l.tags[b]; delete l.tags[b]; status('Merged.'); changed(t.id); }
+function splitLine(a, b) {
+  const t = cur(), l = lab(t.id), n = Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), 1), hit = new Set(); pushHist(t.id);
+  for (let k = 0; k <= n; k++) { const y = Math.round(a[0] + (b[0] - a[0]) * k / n), x = Math.round(a[1] + (b[1] - a[1]) * k / n);
+    for (const [dy, dx] of [[0, 0], [0, 1], [1, 0]]) { const yy = y + dy, xx = x + dx; if (yy >= t.h || xx >= t.w) continue; const j = yy * t.w + xx; if (l.m[j]) { hit.add(l.m[j]); l.m[j] = 0; } } }
+  let made = 0; const minA = S.pack.min_area || 10;
+  for (const id of hit) { const cs = comps(t, l.m, id); for (const c of cs.slice(1)) { if (c.length < minA) { for (const q of c) l.m[q] = 0; continue; } const nid = l.next++; for (const q of c) l.m[q] = nid; made++; } }
+  status(made ? `Split into ${made + 1}.` : 'The line did not cut an object into two pieces. Drag it all the way across.', made ? '' : 'warn'); changed(t.id);
+}
+function fillPoly(pts) {
+  const t = cur(), l = lab(t.id); if (pts.length < 3) { status('Draw at least three points around the object.', 'warn'); return; }
+  pushHist(t.id); const id = l.next++;
+  const ys = pts.map(p => p[0]), y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(t.h - 1, Math.ceil(Math.max(...ys)));
+  let n = 0;
+  for (let y = y0; y <= y1; y++) { const xs = [];
+    for (let k = 0; k < pts.length; k++) { const [ay, ax] = pts[k], [by, bx] = pts[(k + 1) % pts.length]; const yc = y + 0.5;
+      if ((ay <= yc && by > yc) || (by <= yc && ay > yc)) xs.push(ax + (yc - ay) / (by - ay) * (bx - ax)); }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) for (let x = Math.max(0, Math.ceil(xs[k] - 0.5)); x <= Math.min(t.w - 1, Math.floor(xs[k + 1] - 0.5)); x++) { l.m[y * t.w + x] = id; n++; } }
+  prune(l); S.sel = n ? id : 0; status(n ? 'New object drawn.' : 'That shape was too small.', n ? '' : 'warn'); changed(t.id);
+}
+function paint(y, x, erase, force) {
+  const t = cur(), l = lab(t.id), r = +$('rad').value;
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { if (dy * dy + dx * dx > r * r) continue; const yy = y + dy, xx = x + dx; if (yy < 0 || xx < 0 || yy >= t.h || xx >= t.w) continue;
+    const j = yy * t.w + xx;
+    if (erase) { if (force || !S.sel || l.m[j] === S.sel) l.m[j] = 0; }
+    else if (force || l.m[j] === 0 || l.m[j] === S.sel) l.m[j] = S.sel; }
+}
+function floodFill(y, x, force) {
+  const t = cur(), l = lab(t.id), j0 = y * t.w + x, from = l.m[j0];
+  if (from && !force) { status('Fill works on empty pixels. Click inside a gap, or hold Shift to recolour an object.', 'warn'); return; }
+  const lim = Math.round((S.pack.fill_max_frac || 0.05) * t.h * t.w), seen = new Uint8Array(l.m.length), st = [j0], reg = []; seen[j0] = 1;
+  while (st.length) { const q = st.pop(); reg.push(q); if (reg.length > lim) { status('That gap is open to the background. Close it with the brush first, then fill.', 'warn'); return; }
+    const yy = (q / t.w) | 0, xx = q % t.w;
+    for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const a = yy + dy, b = xx + dx; if (a < 0 || b < 0 || a >= t.h || b >= t.w) continue; const k = a * t.w + b; if (!seen[k] && l.m[k] === from) { seen[k] = 1; st.push(k); } } }
+  pushHist(t.id); const id = S.sel || l.next++; for (const q of reg) l.m[q] = id; S.sel = id; prune(l);
+  status(`Filled ${reg.length} pixels.`); changed(t.id);
+}
+function removeSel() { const t = cur(), l = lab(t.id); if (!S.sel) return; pushHist(t.id); for (let i = 0; i < l.m.length; i++) if (l.m[i] === S.sel) l.m[i] = 0; delete l.tags[S.sel]; S.sel = 0; changed(t.id); }
+function undo() { const t = cur(), l = lab(t.id), h = l.hist.pop(); if (!h) return; l.m = h.m; l.tags = h.tags; l.next = h.next; l.base = h.base; S.sel = 0; changed(t.id); }
+function tag(v) { const t = cur(), l = lab(t.id); if (!S.sel) { status('Select an object first.', 'warn'); return; } if (v) l.tags[S.sel] = v; else delete l.tags[S.sel]; changed(t.id); }
+function toggleDone() { const t = cur(), l = lab(t.id); l.done = !l.done; changed(t.id, false); }
+
+// ---- drawing ----
+function hex(c) { const v = parseInt(String(c || '#ffffff').replace('#', ''), 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+function lin(c, v) { const x = v / 255; return c.enc === 'sqrt' ? x * x : x; }
+function stats(t, c, v) { const k = t.id + '|' + c.key; if (S.st[k]) return S.st[k]; const h = new Float64Array(256); for (let i = 0; i < v.length; i++) h[v[i]]++;
+  const q = p => { let a = 0; for (let j = 0; j < 256; j++) { a += h[j]; if (a >= p * v.length) return lin(c, j); } return 1; };
+  return (S.st[k] = { lo: q(0.01), hi: Math.max(q(0.995), q(0.01) + 1e-3) }); }
+function lut(t, c, v) { const s = stats(t, c, v), br = +$('bright').value, g = 1 - 0.75 * +$('gamma').value, bk = +$('black').value;
+  const lo = s.lo + bk * (s.hi - s.lo), span = Math.max(1e-4, (s.hi - lo) / (br * (c.gain ?? 1))), L = new Uint8Array(256);
+  for (let j = 0; j < 256; j++) L[j] = Math.round(255 * Math.pow(Math.min(1, Math.max(0, (lin(c, j) - lo) / span)), g)); return L; }
+function showHelp() { $('help').hidden = false; $('helpok').focus(); }
+function hideHelp() { $('help').hidden = true; try { localStorage.setItem(lsKey() + '_help', '1'); } catch (e) {} }
+function scaleBar(t, z) { const um = t.source?.um_per_px; if (!um) return;
+  const want = t.w * um / 6, nice = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500].reduce((a, b) => Math.abs(b - want) < Math.abs(a - want) ? b : a), L = nice / um * z;
+  const x = 14, y = cv.height - 16; ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(x - 6, y - 22, L + 12, 30);
+  ctx.fillStyle = '#fff'; ctx.fillRect(x, y, L, 4); ctx.font = '600 12px JetBrains Mono, monospace'; ctx.fillText(`${nice} µm`, x, y - 6); }
+function mini() { const t = cur(), F = t && S.pack.fields?.[t.source?.field]; $('minibox').hidden = !F; if (!F) return;
+  const mc = $('mini'), im = S.thumbs[t.source.field];
+  if (!im) { const i = new Image(); i.onload = () => { S.thumbs[t.source.field] = i; mini(); }; i.src = F.thumb; S.thumbs[t.source.field] = null; return; }
+  mc.width = im.naturalWidth; mc.height = im.naturalHeight; const c = mc.getContext('2d'), k = mc.width / F.w; c.drawImage(im, 0, 0);
+  c.lineWidth = 2; c.strokeStyle = '#ffd400'; c.strokeRect(t.source.x0 * k, t.source.y0 * k, t.w * k, t.h * k);
+  const st = cv.parentElement, z = cv.width / t.w;
+  if (st.scrollWidth > st.clientWidth + 2 || st.scrollHeight > st.clientHeight + 2) { c.lineWidth = 1; c.strokeStyle = '#fff';
+    c.strokeRect((t.source.x0 + st.scrollLeft / z) * k, (t.source.y0 + st.scrollTop / z) * k, Math.min(t.w, st.clientWidth / z) * k, Math.min(t.h, st.clientHeight / z) * k); }
+  $('minicap').textContent = `${t.source.field} · whole image ${F.um_per_px ? `${(F.w * F.um_per_px).toFixed(0)}×${(F.h * F.um_per_px).toFixed(0)} µm` : `${F.w}×${F.h} px`}; yellow box = this tile`; }
+function fitZoom() { const t = cur(); if (!t) return; const st = cv.parentElement, w = st.clientWidth - 20, h = st.clientHeight - 20;
+  $('zoom').value = Math.max(0.25, Math.min(4, Math.floor(Math.min(w / t.w, h / t.h) * 20) / 20)); }
+function draw() {
+  const t = cur(); if (!t) return; const I = S.img[t.id] || {}; const z = +$('zoom').value, l = lab(t.id);
+  cv.width = Math.round(t.w * z); cv.height = Math.round(t.h * z);
+  const im = ctx.createImageData(t.w, t.h), a = im.data, chs = S.pack.channels.filter(c => S.on[c.key] && I[c.key]);
+  const solo = chs.length === 1, LU = {}; for (const c of chs) LU[c.key] = lut(t, c, I[c.key]);
+  for (let i = 0; i < t.w * t.h; i++) { let r = 0, g = 0, b = 0;
+    for (const c of chs) { const v = LU[c.key][I[c.key][i]]; if (solo) { r = g = b = v; } else { const [cr, cg, cb] = c.rgb; r += v * cr / 255; g += v * cg / 255; b += v * cb / 255; } }
+    a[4 * i] = Math.min(255, r); a[4 * i + 1] = Math.min(255, g); a[4 * i + 2] = Math.min(255, b); a[4 * i + 3] = 255; }
+  if (!S.hide) {
+    const ref = t.ref && $('shr').checked ? t.ref : null, fv = $('fillv').checked;
+    const ok = (S.pack.prefill_models || []).map(m => m.key).find(k => k !== l.base && t.prefills?.[k]), om = $('cmp').checked && ok ? baseMask(t, ok) : null;
+    if (om) for (let i = 0; i < om.length; i++) { const o = om[i]; if (!o) continue; const y = (i / t.w) | 0, x = i % t.w;
+      if ((x > 0 && om[i - 1] !== o) || (x < t.w - 1 && om[i + 1] !== o) || (y > 0 && om[i - t.w] !== o) || (y < t.h - 1 && om[i + t.w] !== o)) { a[4 * i] = 0; a[4 * i + 1] = 230; a[4 * i + 2] = 255; } }
+    for (let i = 0; i < l.m.length; i++) { const id = l.m[i]; const y = (i / t.w) | 0, x = i % t.w;
+      if (ref && ref[i]) { const nb = (x > 0 && ref[i - 1] !== ref[i]) || (x < t.w - 1 && ref[i + 1] !== ref[i]) || (y > 0 && ref[i - t.w] !== ref[i]) || (y < t.h - 1 && ref[i + t.w] !== ref[i]);
+        if (nb) { a[4 * i] = 255; a[4 * i + 1] = 235; a[4 * i + 2] = 0; } }
+      if (!id) { const nb = (x > 0 && l.m[i - 1]) || (x < t.w - 1 && l.m[i + 1]) || (y > 0 && l.m[i - t.w]) || (y < t.h - 1 && l.m[i + t.w]);
+        if (nb) { const [r, g, b] = nb === S.sel ? [255, 255, 255] : l.tags[nb] ? [255, 150, 40] : [255, 60, 200]; a[4 * i] = r; a[4 * i + 1] = g; a[4 * i + 2] = b; }
+        continue; }
+      const bnd = (x === 0 || l.m[i - 1] !== id) || (x === t.w - 1 || l.m[i + 1] !== id) || (y === 0 || l.m[i - t.w] !== id) || (y === t.h - 1 || l.m[i + t.w] !== id);
+      if (bnd || fv || id === S.sel) {
+        const [r, g, b] = id === S.sel ? [255, 255, 255] : l.tags[id] ? [255, 150, 40] : [255, 60, 200];
+        const al = bnd ? 1 : (fv ? 0.2 : id === S.sel ? 0.14 : 0);
+        a[4 * i] = a[4 * i] * (1 - al) + r * al; a[4 * i + 1] = a[4 * i + 1] * (1 - al) + g * al; a[4 * i + 2] = a[4 * i + 2] * (1 - al) + b * al; }
+    }
+  }
+  const off = document.createElement('canvas'); off.width = t.w; off.height = t.h; off.getContext('2d').putImageData(im, 0, 0);
+  ctx.imageSmoothingEnabled = z < 1; ctx.drawImage(off, 0, 0, cv.width, cv.height);
+  scaleBar(t, z); mini();
+  if (!S.hide) { ctx.font = `600 ${Math.max(10, 6 * z)}px JetBrains Mono, monospace`; ctx.fillStyle = '#ffb040';
+    const sums = {}; for (let i = 0; i < l.m.length; i += 2) { const id = l.m[i]; if (id && l.tags[id]) { const s = sums[id] || (sums[id] = [0, 0, 0]); s[0] += (i / t.w) | 0; s[1] += i % t.w; s[2]++; } }
+    for (const [id, s] of Object.entries(sums)) { const tg = S.pack.tags.find(x => x.key === l.tags[id]); ctx.fillText(tg ? tg.short : '?', (s[1] / s[2]) * z, (s[0] / s[2]) * z); } }
+  if (S.drag && S.tool === 'split' && S.drag.b) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo((S.drag.a[1] + .5) * z, (S.drag.a[0] + .5) * z); ctx.lineTo((S.drag.b[1] + .5) * z, (S.drag.b[0] + .5) * z); ctx.stroke(); ctx.setLineDash([]); }
+  if (S.poly && S.poly.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); S.poly.forEach(([y, x], k) => k ? ctx.lineTo((x + .5) * z, (y + .5) * z) : ctx.moveTo((x + .5) * z, (y + .5) * z)); ctx.stroke(); }
+  const ids = new Set(l.m); ids.delete(0); const nt = Object.keys(l.tags).length, obj = S.pack.object || 'object';
+  const um = t.source?.um_per_px; $('title').textContent = `${t.id}${t.note ? ' · ' + t.note : ''}${um ? ` · ${t.w}×${t.h} px = ${(t.w * um).toFixed(0)}×${(t.h * um).toFixed(0)} µm · ${um} µm/px` : ''}`;
+  $('stat').textContent = `${ids.size} ${obj}s${nt ? ` · ${nt} tagged` : ''}${l.edited ? ' · edited' : ''}`;
+  $('done').textContent = l.done ? 'Accepted ✓ (reopen)' : 'Accept tile';
+  [...$('tools').children].forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.tool ? 'true' : 'false'));
+  [...$('chans').children].forEach(b => b.setAttribute('aria-pressed', S.on[b.dataset.v] ? 'true' : 'false'));
+  [...$('bases').children].forEach(b => { b.setAttribute('aria-pressed', b.dataset.v === l.base ? 'true' : 'false'); b.disabled = !t.prefills?.[b.dataset.v]; });
+  const okk = (S.pack.prefill_models || []).find(m => m.key !== l.base); $('cmpname').textContent = okk ? okk.name : 'other model';
+  const ct = l.tags[S.sel] || ''; [...$('tags').children].forEach(b => b.setAttribute('aria-pressed', S.sel && b.dataset.v === ct ? 'true' : 'false'));
+  cv.style.cursor = S.tool === 'split' ? 'col-resize' : S.tool === 'select' || S.tool === 'merge' ? 'pointer' : 'crosshair';
+}
+function renderList() {
+  const nd = S.tiles.filter(t => S.L[t.id]?.done).length; $('progress').textContent = `${nd} of ${S.tiles.length} tiles accepted`;
+  $('list').replaceChildren(...S.tiles.map((t, i) => { const b = document.createElement('button'); b.type = 'button'; const l = S.L[t.id];
+    b.className = 'item' + (l?.done ? ' done' : ''); b.setAttribute('aria-current', i === S.idx ? 'true' : 'false');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = t.id;
+    if (t.split) { const sp = document.createElement('span'); sp.className = 'split'; sp.textContent = t.split; nm.append(sp); }
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = l?.done ? '✓ accepted' : l?.edited ? 'edited' : '';
+    const g = document.createElement('span'); g.className = 'gp'; g.textContent = t.note || ''; b.append(nm, n, g); b.onclick = () => select(i); return b; }));
+}
+function loadImgs(t) {
+  if (S.img[t.id]) return; S.img[t.id] = {};
+  for (const c of S.pack.channels) { const src = t.images?.[c.key]; if (!src) continue; const im = new Image();
+    im.onload = () => { const k = document.createElement('canvas'); k.width = t.w; k.height = t.h; const x = k.getContext('2d'); x.drawImage(im, 0, 0);
+      const d = x.getImageData(0, 0, t.w, t.h).data, v = new Uint8Array(t.w * t.h); for (let i = 0; i < v.length; i++) v[i] = d[4 * i]; S.img[t.id][c.key] = v; if (cur() === t) draw(); };
+    im.src = src; }
+}
+function select(i) { S.idx = Math.max(0, Math.min(S.tiles.length - 1, i)); S.sel = 0; S.poly = null; if (S.fit) fitZoom(); loadImgs(cur()); if (S.tiles[S.idx + 1]) loadImgs(S.tiles[S.idx + 1]);
+  try { localStorage.setItem(lsKey() + '_idx', S.idx); } catch (e) {} renderList(); draw(); }
+
+// ---- input ----
+function px(ev) { const r = cv.getBoundingClientRect(), t = cur(); return [(ev.clientY - r.top) * t.h / r.height, (ev.clientX - r.left) * t.w / r.width]; }
+cv.addEventListener('pointerdown', ev => {
+  const t = cur(); if (!t) return; const [fy, fx] = px(ev), y = Math.floor(fy), x = Math.floor(fx); if (y < 0 || x < 0 || y >= t.h || x >= t.w) return; const l = lab(t.id), here = l.m[y * t.w + x];
+  if (S.tool === 'select') { S.sel = here; draw(); return; }
+  if (S.tool === 'merge') { if (!here) return; if (!S.sel) { S.sel = here; status('Now click the other pieces of this object.'); draw(); } else mergeInto(S.sel, here); return; }
+  if (S.tool === 'draw') { if (ev.detail >= 2) return; S.poly = S.poly || []; S.poly.push([fy, fx]); draw(); return; }
+  if (S.tool === 'fill') { floodFill(y, x, ev.shiftKey); return; }
+  cv.setPointerCapture(ev.pointerId); S.drag = { a: [y, x], b: null };
+  if (S.tool === 'brush' || S.tool === 'erase') { pushHist(t.id);
+    if (S.tool === 'brush' && !S.sel) { S.sel = here || l.next++; }
+    paint(y, x, S.tool === 'erase', ev.shiftKey); draw(); }
+});
+cv.addEventListener('dblclick', () => { if (S.tool === 'draw' && S.poly) { const p = S.poly; S.poly = null; fillPoly(p); } });
+cv.addEventListener('pointermove', ev => { if (!S.drag) return; const t = cur(), [fy, fx] = px(ev), y = Math.floor(fy), x = Math.floor(fx);
+  if (S.tool === 'split') { S.drag.b = [Math.max(0, Math.min(t.h - 1, y)), Math.max(0, Math.min(t.w - 1, x))]; draw(); return; }
+  if (y < 0 || x < 0 || y >= t.h || x >= t.w) return; paint(y, x, S.tool === 'erase', ev.shiftKey); draw(); });
+cv.addEventListener('pointerup', () => { const d = S.drag; S.drag = null; if (!d) return; const t = cur(), l = lab(t.id);
+  if (S.tool === 'split') { if (d.b) splitLine(d.a, d.b); else draw(); } else { prune(l); if (!l.m.includes(S.sel)) S.sel = 0; changed(t.id); } });
+[...$('tools').children].forEach(b => b.onclick = () => { S.tool = b.dataset.v; S.poly = null; if (S.tool === 'merge') S.sel = 0; draw(); });
+$('del').onclick = removeSel; $('undo').onclick = undo; $('done').onclick = toggleDone; $('export').onclick = exportZip; $('share').onclick = sharePack;
+$('close').onclick = () => { S.pack = null; S.tiles = []; S.L = {}; S.img = {}; showStart(); };
+['bright', 'shr', 'fillv', 'cmp'].forEach(id => $(id).addEventListener('input', draw));
+$('helpbtn').onclick = showHelp; $('helpok').onclick = hideHelp; $('help').addEventListener('click', e => { if (e.target === $('help')) hideHelp(); });
+window.addEventListener('resize', () => { if (S.pack && S.fit) { fitZoom(); draw(); } });
+$('zoom').addEventListener('input', () => { S.fit = false; draw(); });
+$('fit').onclick = () => { S.fit = true; fitZoom(); draw(); };
+cv.parentElement.addEventListener('scroll', () => mini(), { passive: true });
+const DISP = { bright: '1', gamma: '0.4', black: '0' };
+function saveDisp() { try { localStorage.setItem(lsKey() + '_disp', JSON.stringify(Object.fromEntries(Object.keys(DISP).map(k => [k, $(k).value])))); } catch (e) {} }
+function loadDisp() { let o = {}; try { o = JSON.parse(localStorage.getItem(lsKey() + '_disp') || '{}'); } catch (e) {} for (const k in DISP) $(k).value = o[k] ?? DISP[k]; }
+['gamma', 'black', 'bright'].forEach(id => $(id).addEventListener('input', () => { draw(); saveDisp(); }));
+$('dispreset').onclick = () => { for (const k in DISP) $(k).value = DISP[k]; saveDisp(); draw(); };
+document.addEventListener('keydown', e => {
+  if (!$('help').hidden) { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); hideHelp(); } return; }
+  if (!S.pack || e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === 'INPUT') return; const k = e.key;
+  const tools = { v: 'select', m: 'merge', s: 'split', w: 'draw', b: 'brush', e: 'erase', f: 'fill' };
+  if (tools[k]) { S.tool = tools[k]; S.poly = null; if (S.tool === 'merge') S.sel = 0; draw(); }
+  else if (k === 'Enter' && S.poly) { const p = S.poly; S.poly = null; fillPoly(p); }
+  else if (k === 'Escape') { S.poly = null; S.sel = 0; draw(); }
+  else if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); removeSel(); }
+  else if (/^[1-9]$/.test(k) && S.pack.tags[+k - 1]) tag(S.pack.tags[+k - 1].key); else if (k === '0') tag('');
+  else if (k === 'z') undo(); else if (k === 'c') toggleDone();
+  else if (k === 'n') select(S.idx + 1); else if (k === 'p') select(S.idx - 1);
+  else if (k === '[' || k === ']') { $('rad').value = +$('rad').value + (k === ']' ? 1 : -1); }
+  else if (k === 'h' && !e.repeat) { S.hide = true; draw(); }
+});
+document.addEventListener('keyup', e => { if (e.key === 'h') { S.hide = false; draw(); } });
+
+// ---- packs ----
+function validPack(p) {
+  if (!p || p.format !== 'goudacell-labelpack') return 'This file is not a goudacell tile pack.';
+  if (!p.pack_id || !Array.isArray(p.tiles) || !p.tiles.length || !Array.isArray(p.channels) || !p.channels.length) return 'The tile pack is missing its id, tiles or channels.';
+  for (const t of p.tiles) if (!t.id || !t.h || !t.w) return `Tile ${t.id || '?'} is missing its size.`;
+  return '';
+}
+async function openPack(p, how) {
+  const err = validPack(p); if (err) { $('loadmsg').textContent = err; $('loadmsg').className = 'status err'; return; }
+  p.tags = p.tags || []; p.channels.forEach(c => c.rgb = hex(c.color));
+  S.pack = p; S.tiles = p.tiles; S.L = {}; S.img = {}; S.st = {}; S.bm = {}; S.thumbs = {}; S.on = {}; p.channels.forEach(c => S.on[c.key] = c.visible !== false);
+  for (const t of S.tiles) t.ref = t.reference ? unrle(t.reference, t.h * t.w) : null;
+  $('eyebrow').textContent = `goudacell · ${p.object || 'object'} labels · ${p.tiles.length} tiles`;
+  $('h1').textContent = p.name || p.pack_id;
+  $('rule').textContent = p.instructions || '';
+  $('refname').textContent = p.reference_name || 'Reference'; $('shrl').hidden = !S.tiles.some(t => t.ref);
+  $('chans').replaceChildren(...p.channels.map(c => { const b = document.createElement('button'); b.type = 'button'; b.dataset.v = c.key;
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = c.color || '#fff'; b.append(sw, c.name || c.key);
+    b.onclick = () => { S.on[c.key] = !S.on[c.key];
+      if (S.on[c.key]) p.channels.forEach(o => { if (o.key === c.swap || o.swap === c.key) S.on[o.key] = false; }); draw(); }; return b; }));
+  loadDisp();
+  const pm = p.prefill_models || []; $('basebar').hidden = pm.filter(m => p.tiles.some(t => t.prefills?.[m.key])).length < 2;
+  $('bases').replaceChildren(...pm.map(m => { const b = document.createElement('button'); b.type = 'button'; b.dataset.v = m.key; b.textContent = m.name || m.key; b.onclick = () => setBase(m.key); return b; }));
+  $('tagbar').hidden = !p.tags.length;
+  $('tags').replaceChildren(...[{ key: '', name: 'None' }, ...p.tags].map(g => { const b = document.createElement('button'); b.type = 'button'; b.dataset.v = g.key; b.textContent = g.name; b.onclick = () => tag(g.key); return b; }));
+  $('tagkeys').replaceChildren(...p.tags.flatMap((g, i) => { const k = document.createElement('kbd'); k.textContent = i + 1; return [k, ` ${g.name}${i < p.tags.length - 1 ? ',' : '.'} `]; }));
+  try { const b = JSON.parse(localStorage.getItem(lsKey()) || '{}'); for (const [id, s] of Object.entries(b)) { restore(id, s); lab(id).saved = false; } } catch (e) {}
+  $('loadmsg').textContent = ''; $('start').hidden = true; $('main').hidden = false; $('helpbtn').hidden = false; let seen = false; try { seen = !!localStorage.getItem(lsKey() + '_help'); } catch (e) {} if (!seen) showHelp();
+  $('export').hidden = !(S.dl || S.offline); $('close').hidden = !!S.offline; $('share').hidden = !(S.assets && S.canEdit && how === 'file');
+  let i = 0; try { i = +(localStorage.getItem(lsKey() + '_idx') || 0); } catch (e) {} select(i || 0);
+  await syncLabels();
+}
+async function syncLabels() {
+  if (!S.db || !S.uid || !S.pack) return;
+  try {
+    const snap = await S.db.collection('labels').where('pack_id', '==', S.pack.pack_id).where('annotator', '==', S.uid).get();
+    for (const d of snap.docs) { const v = d.data(); if (!v) continue; const loc = S.L[v.tile_id];
+      if (!(loc && !loc.saved && loc.t > Date.parse(v.updated || 0))) { restore(v.tile_id, { ...v, t: Date.parse(v.updated || 0) }); lab(v.tile_id).saved = true; } }
+    S.connected = true;
+    for (const t of S.tiles) if (S.L[t.id] && !S.L[t.id].saved && (S.L[t.id].edited || S.L[t.id].done)) save(t.id);
+    if (!Object.keys(S.timers).length) badge('Saved', 'ok');
+    status('Connected. Labels save automatically.'); renderList(); draw();
+  } catch (e) { noSave(`Could not read your saved labels (${e?.code || 'error'}).`); }
+}
+async function sharePack() {
+  if (!S.assets || !S.pack) return; $('share').disabled = true; status('Sharing pack…');
+  try {
+    const raw = JSON.stringify({ ...S.pack, channels: S.pack.channels.map(({ rgb, ...c }) => c), tiles: S.pack.tiles.map(({ ref, ...t }) => t) });
+    const up = await S.assets.upload(new Blob([raw], { type: 'application/json' }), { type: 'application/json' });
+    await S.db.doc('packs/' + safe(S.pack.pack_id)).set({ pack_id: S.pack.pack_id, name: S.pack.name || S.pack.pack_id, object: S.pack.object || 'object', n_tiles: S.pack.tiles.length, asset: up.id, shared: new Date().toISOString() });
+    status('Shared. Annotators can now pick this pack from the start screen.'); $('share').hidden = true;
+  } catch (e) { status(`Could not share the pack (${e?.code || 'error'}).`, 'err'); }
+  $('share').disabled = false;
+}
+async function listPacks() {
+  if (!S.db) { $('packsmsg').textContent = 'Shared packs need you to be signed in to this page. You can still open a pack file.'; return; }
+  try {
+    const snap = await S.db.collection('packs').get(); const ps = snap.docs.map(d => d.data()).filter(Boolean).sort((a, b) => (b.shared || '').localeCompare(a.shared || ''));
+    if (!ps.length) { $('packsmsg').textContent = 'No shared packs yet. The page owner can open a pack file and press "Share pack with annotators".'; $('packs').replaceChildren(); return; }
+    $('packsmsg').textContent = 'Pick a pack to start or continue labelling.'; S.packs = ps;
+    $('packs').replaceChildren(...ps.map(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'pack';
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = p.name; const n = document.createElement('span'); n.className = 'meta'; n.textContent = `${p.n_tiles} tiles`;
+      const m = document.createElement('span'); m.className = 'meta'; m.textContent = `${p.object}s · shared ${String(p.shared || '').slice(0, 10)}`; b.append(nm, n, m);
+      b.onclick = async () => { $('loadmsg').textContent = 'Loading pack…'; $('loadmsg').className = 'status';
+        try { const r = await fetch('/_blob/' + p.asset); if (!r.ok) throw new Error(r.status); await openPack(await r.json(), 'shared'); }
+        catch (e) { $('loadmsg').textContent = 'Could not load that pack. Ask the page owner to share it again, or open the pack file directly.'; $('loadmsg').className = 'status err'; } };
+      return b; }));
+    if (ps.length === 1 && !S.pack && !S.autoOpened) { S.autoOpened = true; $('packs').firstChild.click(); }
+  } catch (e) { $('packsmsg').textContent = `Could not list shared packs (${e?.code || 'error'}).`; }
+}
+function readFile(f) { if (!f) return; $('loadmsg').textContent = 'Reading pack…'; $('loadmsg').className = 'status';
+  const r = new FileReader(); r.onload = () => { let p; try { p = JSON.parse(r.result); } catch (e) { $('loadmsg').textContent = 'That file is not valid JSON.'; $('loadmsg').className = 'status err'; return; } openPack(p, 'file'); };
+  r.onerror = () => { $('loadmsg').textContent = 'Could not read that file.'; $('loadmsg').className = 'status err'; }; r.readAsText(f); }
+function showStart() { $('start').hidden = false; $('main').hidden = true; $('help').hidden = true; $('helpbtn').hidden = true; $('export').hidden = true; $('close').hidden = true; $('share').hidden = true;
+  $('eyebrow').textContent = 'goudacell · segmentation ground truth'; $('h1').textContent = 'Label a tile pack'; status(''); listPacks(); }
+$('file').addEventListener('change', e => { readFile(e.target.files[0]); e.target.value = ''; });
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => readFile(e.dataTransfer.files[0]));
+
+(async function boot() {
+  const emb = document.getElementById('embedded-pack');
+  if (emb) { S.offline = true; badge('Saved in this browser', 'ok'); if (window.claude?.use) window.claude.use('downloads').then(d => { S.dl = d; }).catch(() => {}); let p; try { p = JSON.parse(emb.textContent); } catch (e) { showStart(); status('The embedded pack could not be read.', 'err'); return; } await openPack(p, 'embedded'); return; }
+  showStart();
+  const use = n => window.claude?.use ? window.claude.use(n) : Promise.resolve(null);
+  const [db, user, dl, assets] = await Promise.all([use('db'), use('user'), use('downloads'), use('assets')]);
+  S.dl = dl; S.assets = assets; S.uid = user ? await user.id() : null; S.canEdit = user ? await user.canEdit() : false;
+  if (S.pack) $('export').hidden = !dl;
+  if (!db || !S.uid) { S.db = null; badge(S.uid ? 'Not saving' : 'Not signed in', 'bad'); listPacks(); if (S.pack) noSave(!S.uid ? 'You are not signed in to this page.' : ''); return; }
+  S.db = db; badge('Connected', 'ok'); listPacks();
+  if (S.pack) await syncLabels();
+})();
+</script>

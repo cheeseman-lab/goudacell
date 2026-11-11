@@ -254,6 +254,34 @@ finds none.
   the env with `conda env remove -n goudacell_cp` and rerun the setup script.
 - **Warnings on `cellprofiler --version`** (pkg_resources, SciPy/NumPy version) are harmless.
 
+## Annotation Packs (check, correct, fine-tune)
+
+Look at a segmentation in a browser, and correct it to make training labels. An annotator needs only the
+HTML file: it opens offline with no account, saves work in the browser, and exports a zip.
+
+After a batch run, one command makes the labeler from the run's own images and masks. Every mask the run
+writes gets a `.meta.json` record of how it was made, and that record goes into the pack:
+
+```bash
+goudacell labels from-run configs/run.yaml labels/run/                         # cells (or nuclei)
+goudacell labels from-run configs/run.yaml labels/run/ --objects second_objs   # secondary objects
+```
+
+To compare several models, or for images from elsewhere, write a spec and build it yourself:
+
+```bash
+goudacell labels pack spec.json pack.json        # tiles from whole fields + each model's masks
+goudacell labels html pack.json labeler.html     # one self-contained file to send
+goudacell labels read labels.zip masks/          # returned masks as <tile_id>.tif + labels.json
+goudacell labels next pack.json labels.zip pack_r2.json   # next round starts from the returned labels
+```
+
+The spec (JSON) lists fields: `image` (`.npy` or any format goudacell reads), `channels` ({key: index}), `um_per_px`,
+`tile_px`, `n_tiles`, `split` (train/test) and `prefills` ({model: path or [file.npz, key]}), plus the pack's
+`channels`, `prefill_models` and `instructions`. Tiles are native-resolution windows with a typical object
+count. Each tile can start from any of the models, and shows its place in the field and a µm scale bar.
+See `goudacell.labels.build_pack` for every key.
+
 ## Which Cellpose Version?
 
 `.[cellpose]` installs both, as brieflow does, and the model name picks the version:

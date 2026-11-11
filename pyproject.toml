@@ -74,7 +74,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-goudacell = ["brieflow/LICENSE", "data/*.cppipe"]
+goudacell = ["brieflow/LICENSE", "data/*.cppipe", "data/labeler.html", "data/fflate-*.js"]
 
 [tool.ruff]
 line-length = 100

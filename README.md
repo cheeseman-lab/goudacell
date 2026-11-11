@@ -6,6 +6,7 @@ Cell segmentation and feature extraction on a Slurm HPC cluster (or any GPU mach
 
 - **Segmentation modes**: nuclei-only, cells-only, or dual (both)
 - **Secondary objects**: detect objects inside cells (pathogens, organelles) by thresholding or Cellpose
+- **Labeler**: check and correct masks in a one-file browser page, for QC or fine-tuning ([guide](docs/labeling.md))
 - **Feature extraction**: CellProfiler-equivalent morphological and intensity features, plus your own custom features
 - **Brieflow inside**: runs [brieflow](https://github.com/cheeseman-lab/brieflow)'s phenotype code (vendored unchanged), so masks and features match brieflow's for the same parameters
 - **File formats**: TIFF, Nikon ND2, DeltaVision (.dv)
@@ -254,33 +255,17 @@ finds none.
   the env with `conda env remove -n goudacell_cp` and rerun the setup script.
 - **Warnings on `cellprofiler --version`** (pkg_resources, SciPy/NumPy version) are harmless.
 
-## Annotation Packs (check, correct, fine-tune)
+## Labeler: check and correct segmentations
 
-Look at a segmentation in a browser, and correct it to make training labels. An annotator needs only the
-HTML file: it opens offline with no account, saves work in the browser, and exports a zip.
-
-After a batch run, one command makes the labeler from the run's own images and masks. Every mask the run
-writes gets a `.meta.json` record of how it was made, and that record goes into the pack:
+After a run, make a one-file browser labeler from its images and masks. Use it to check the
+segmentation, and optionally correct it for scoring or fine-tuning:
 
 ```bash
-goudacell labels from-run configs/run.yaml labels/run/                         # cells (or nuclei)
-goudacell labels from-run configs/run.yaml labels/run/ --objects second_objs   # secondary objects
+goudacell labels from-run configs/run.yaml labels/run/   # --objects second_objs for secondary objects
+goudacell labels read labels.zip corrected/              # read returned corrections
 ```
 
-To compare several models, or for images from elsewhere, write a spec and build it yourself:
-
-```bash
-goudacell labels pack spec.json pack.json        # tiles from whole fields + each model's masks
-goudacell labels html pack.json labeler.html     # one self-contained file to send
-goudacell labels read labels.zip masks/          # returned masks as <tile_id>.tif + labels.json
-goudacell labels next pack.json labels.zip pack_r2.json   # next round starts from the returned labels
-```
-
-The spec (JSON) lists fields: `image` (`.npy` or any format goudacell reads), `channels` ({key: index}), `um_per_px`,
-`tile_px`, `n_tiles`, `split` (train/test) and `prefills` ({model: path or [file.npz, key]}), plus the pack's
-`channels`, `prefill_models` and `instructions`. Tiles are native-resolution windows with a typical object
-count. Each tile can start from any of the models, and shows its place in the field and a µm scale bar.
-See `goudacell.labels.build_pack` for every key.
+See the [labeler guide](docs/labeling.md).
 
 ## Which Cellpose Version?
 

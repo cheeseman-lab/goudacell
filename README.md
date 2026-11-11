@@ -80,6 +80,10 @@ outlines look wrong, go back to step 2. See [Labeler](#labeler).
 | + secondary objects | `*_second_obj_mask.tif` | `*_second_obj_features.csv`, plus per-cell counts in `*_features.csv` |
 
 - Each mask has a `.meta.json` saying how it was made.
+- For puncta in a screen, use the `cell_median_mad` threshold. Its cutoff is `threshold_k`
+  robust noise SDs above the in-cell median, so it follows brightness and doesn't invent objects
+  when a perturbation removes them. Per-field Otsu does invent them. Generating a config also
+  prints the brieflow keys (named `second_objs`, count mode). These need brieflow 1.5.2+.
 - Features cover intensity, shape, texture (Haralick, PFTAS), radial distribution, channel
   correlation, neighbours and foci, plus custom per-cell measurements
   (`ui.set_custom_features([...])`).

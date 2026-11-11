@@ -1,5 +1,6 @@
 """Configuration management for batch segmentation jobs."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Literal, Optional, Union
@@ -102,11 +103,21 @@ class SecondaryObjectParams:
         second_obj_detection: Whether to detect secondary objects (dual mode only).
         second_obj_channel_index: Index of the channel carrying the objects.
         second_obj_method: "threshold", "cellpose", or "stardist".
+        second_obj_name: Object name for brieflow's named ``second_objs`` block (1.5.2+);
+            None writes the flat single-object keys.
+        second_obj_mode: "segment" (outlines and per-object features) or "count"
+            (brieflow's find_foci count per cell; 1.5.2+).
+        threshold_k: Robust-noise multiple for the "cell_median_mad" threshold (1.5.2+).
     """
 
     second_obj_detection: bool = False
     second_obj_channel_index: Optional[int] = None
     second_obj_method: Literal["threshold", "cellpose", "stardist"] = "threshold"
+    second_obj_name: Optional[str] = None
+    second_obj_mode: Literal["segment", "count"] = "segment"
+    # Count mode (find_foci)
+    foci_radius: int = 3
+    foci_threshold: float = 10
     # Size filtering and cell association (all methods)
     second_obj_min_size: float = 10
     second_obj_max_size: float = 200
@@ -126,6 +137,7 @@ class SecondaryObjectParams:
     # Threshold
     threshold_smoothing_scale: float = 1.3488
     threshold_method: str = "otsu_two_peak"
+    threshold_k: float = 5.0
     use_morphological_opening: bool = True
     opening_disk_radius: int = 1
     fill_holes: str = "both"
@@ -172,11 +184,50 @@ class SecondaryObjectParams:
         ),
     }
 
+    _RESERVED = ("cell", "nucleus", "cytoplasm", "second_obj")
+    NEEDS_1_5_2 = ("named second_objs", "count mode", "cell_median_mad threshold")
+
+    def __post_init__(self) -> None:
+        """Check the object name against brieflow 1.5.2's naming rules."""
+        name = self.second_obj_name
+        if name is None:
+            return
+        if not re.fullmatch(r"[a-z][a-z0-9]*(_[a-z0-9]+)*", name):
+            raise ValueError(f"second_obj_name {name!r}: use lower_snake_case")
+        if any(name == r or name.startswith(r + "_") for r in self._RESERVED):
+            raise ValueError(f"second_obj_name {name!r} clashes with brieflow's column prefixes")
+
     def to_dict(self) -> dict:
         """The keys brieflow's phenotype notebook writes for this method."""
         keys = ("second_obj_detection", "second_obj_method", *self._COMMON)
         keys += self._BY_METHOD[self.second_obj_method]
-        return {k: getattr(self, k) for k in keys}
+        out = {k: getattr(self, k) for k in keys}
+        if self.second_obj_method == "threshold" and self.threshold_method == "cell_median_mad":
+            out["threshold_k"] = self.threshold_k
+        if self.second_obj_mode == "count":
+            out.update(
+                second_obj_mode="count",
+                foci_radius=self.foci_radius,
+                foci_threshold=self.foci_threshold,
+            )
+        return out
+
+    def needs_1_5_2(self) -> list:
+        """Features used here that need vendored brieflow 1.5.2 or later."""
+        used = (
+            self.second_obj_name is not None,
+            self.second_obj_mode == "count",
+            self.second_obj_method == "threshold" and self.threshold_method == "cell_median_mad",
+        )
+        return [f for f, u in zip(self.NEEDS_1_5_2, used) if u]
+
+    def to_phenotype_config(self) -> dict:
+        """Brieflow phenotype keys: flat when unnamed, else ``second_objs: {name: spec}``."""
+        spec = self.to_dict()
+        if self.second_obj_name is None:
+            return spec
+        detect = spec.pop("second_obj_detection")
+        return {"second_obj_detection": detect, "second_objs": {self.second_obj_name: spec}}
 
     def to_brieflow_params(self, gpu: bool) -> dict:
         """Parameters for brieflow's ``segment_second_objs_from_config``.
@@ -305,7 +356,10 @@ class SegmentationConfig:
             }
             data["reconcile"] = self.reconcile
             if self.secondary_objects is not None:
-                data["secondary_objects"] = self.secondary_objects.to_dict()
+                so = self.secondary_objects.to_dict()
+                if self.secondary_objects.second_obj_name is not None:
+                    so["second_obj_name"] = self.secondary_objects.second_obj_name
+                data["secondary_objects"] = so
 
         # Add feature extraction params if enabled
         if self.feature_extraction is not None:

@@ -504,8 +504,9 @@ def labels_score(
     nuclei: Optional[str] = typer.Option(None, help="Spec channel key of the nuclei"),
     helper: Optional[str] = typer.Option(None, help="Spec channel key of the helper channel"),
     gpu: bool = typer.Option(True, help="Run the models on the GPU"),
+    save_dir: Optional[Path] = typer.Option(None, help="Write each model's tile masks here"),
 ) -> None:
-    """Score cell models against the labels: objects matched at IoU >= 0.5."""
+    """Score cell models against the labels: cells found, and how close their outlines are."""
     from goudacell.train import evaluate, read_spec
 
     res = evaluate(
@@ -514,15 +515,22 @@ def labels_score(
         model,
         None if split == "all" else [split],
         gpu=gpu,
+        save_dir=save_dir,
         cyto=cyto,
         nuclei=nuclei,
         helper=helper,
     )
+    console.print(
+        "Cells found: matched at IoU >= 0.5. Outlines: matched cells' mean IoU, F1 at IoU >= 0.75,"
+        " and mean distance from the label's outline (px)."
+    )
     for m, r in res.items():
         console.print(
             f"{m}: {len(r['tiles'])} tiles  TP {r['tp']}  FP {r['fp']}  FN {r['fn']}  "
-            f"precision {r['precision']:.3f}  recall {r['recall']:.3f}  F1 {r['f1']:.3f}",
+            f"F1 {r['f1']:.3f} | mean IoU {r['mean_iou']:.3f}  F1@0.75 {r['f1_75']:.3f}  "
+            f"outline {r['boundary_px']:.2f} px",
             highlight=False,
+            soft_wrap=True,
         )
 
 

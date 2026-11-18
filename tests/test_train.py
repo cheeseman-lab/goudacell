@@ -108,3 +108,15 @@ def test_finetune_cyto3_one_epoch_and_score(tmp_path):
     assert meta["tiles"] == ["f0_t0"] and meta["base_model"] == "cyto3"
     res = T.evaluate(spec, tmp_path / "e.zip", ["cyto3", str(path)], gpu=False)
     assert set(res["cyto3"]["tiles"]) == {"f1_t0"} and res[str(path)]["tp"] >= 0
+    assert 0 <= res["cyto3"]["mean_iou"] <= 1 and "f1_75" in res["cyto3"]
+
+
+def test_outline_stats():
+    gt = np.zeros((40, 40), int)
+    gt[5:25, 5:25] = 1
+    pred = np.zeros_like(gt)
+    pred[7:25, 5:25] = 3
+    st = T.outline_stats(gt, pred)
+    assert (st["tp"], st["tp75"]) == (1, 1) and abs(st["ious"][0] - 0.9) < 1e-9
+    assert 0 < st["dists"][0] < 2
+    assert T.boundary_distance(gt == 1, gt == 1) == 0

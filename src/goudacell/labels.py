@@ -216,7 +216,8 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
             ``fields``, each with ``id``, ``image`` (C×Y×X ``.npy``/``.tif``), ``channels``
             ({key: index}), ``um_per_px``, ``tile_px``, ``n_tiles``, ``split``, ``note``,
             ``prefills`` ({key: source}), optional ``reference`` (e.g. nuclei) and optional
-            ``start`` (the prefill its tiles open on). A source is a path or ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
+            ``start`` (the prefill its tiles open on). A source is a path or
+            ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
             ``reference_name``, ``min_area`` (30), ``typical_percentile`` (70, also per field),
             ``provenance`` (free-form: how the prefills were made; carried into exports),
             ``return_to`` (``host:/dir/`` the labeler says to copy the export to), and

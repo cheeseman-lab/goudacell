@@ -201,14 +201,48 @@ def finetune(
     return path
 
 
-def match(gt: np.ndarray, pred: np.ndarray, iou: float = 0.5) -> Tuple[int, int, int]:
-    """``(TP, FP, FN)`` object counts of ``pred`` against ``gt`` at an IoU threshold >= 0.5."""
+def matched_pairs(
+    gt: np.ndarray, pred: np.ndarray, iou: float = 0.5
+) -> List[Tuple[int, int, float]]:
+    """``(gt label, pred label, IoU)`` for each pair overlapping at IoU >= ``iou`` (>= 0.5)."""
     both = (gt > 0) & (pred > 0)
     inter = Counter(zip(gt[both].tolist(), pred[both].tolist()))
     ga = dict(zip(*np.unique(gt[gt > 0], return_counts=True)))
     pa = dict(zip(*np.unique(pred[pred > 0], return_counts=True)))
-    tp = sum(n / (ga[a] + pa[b] - n) >= iou for (a, b), n in inter.items())
-    return tp, len(pa) - tp, len(ga) - tp
+    pairs = [(a, b, n / (ga[a] + pa[b] - n)) for (a, b), n in inter.items()]
+    return [p for p in pairs if p[2] >= iou]
+
+
+def match(gt: np.ndarray, pred: np.ndarray, iou: float = 0.5) -> Tuple[int, int, int]:
+    """``(TP, FP, FN)`` object counts of ``pred`` against ``gt`` at an IoU threshold >= 0.5."""
+    tp = len(matched_pairs(gt, pred, iou))
+    return tp, len(np.unique(pred[pred > 0])) - tp, len(np.unique(gt[gt > 0])) - tp
+
+
+def boundary_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Symmetric mean distance (px) between the outlines of two binary masks."""
+    from scipy import ndimage as ndi
+
+    ys, xs = np.nonzero(a | b)
+    box = (slice(max(ys.min() - 2, 0), ys.max() + 3), slice(max(xs.min() - 2, 0), xs.max() + 3))
+    a, b = a[box], b[box]
+    ea, eb = a & ~ndi.binary_erosion(a), b & ~ndi.binary_erosion(b)
+    da, db = ndi.distance_transform_edt(~ea), ndi.distance_transform_edt(~eb)
+    return float((db[ea].sum() + da[eb].sum()) / max(ea.sum() + eb.sum(), 1))
+
+
+def outline_stats(gt: np.ndarray, pred: np.ndarray) -> Dict[str, Any]:
+    """Counts at IoU 0.5 and 0.75, and each matched cell's IoU and outline distance (px)."""
+    pairs = matched_pairs(gt, pred)
+    tp, fp, fn = match(gt, pred)
+    return dict(
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        tp75=sum(p[2] >= 0.75 for p in pairs),
+        ious=[p[2] for p in pairs],
+        dists=[boundary_distance(gt == a, pred == b) for a, b, _ in pairs],
+    )
 
 
 def segment_cells(model, rgb: np.ndarray, diameter: float, version: int) -> np.ndarray:
@@ -223,13 +257,28 @@ def evaluate(
     models: Sequence[str],
     splits: Optional[Iterable[str]] = ("test",),
     gpu: bool = True,
+    save_dir: Optional[PathLike] = None,
     **channels: Optional[str],
 ) -> Dict[str, Dict[str, Any]]:
     """Score cell models against an export: each runs on the whole field, then is cut to the tile.
 
+    Objects match at IoU >= 0.5. Outline accuracy is the matched cells' mean IoU, the F1 at
+    IoU >= 0.75, and the mean distance (px) between a matched cell's outline and the label's.
+
+    Args:
+        spec: The pack spec the labeler was built from.
+        export: The labeler's export zip.
+        models: Cell models to score (names or weights paths).
+        splits: Score tiles in these splits; None scores every accepted tile.
+        gpu: Run the models on the GPU.
+        save_dir: Also write each model's tile masks as ``<save_dir>/<model>/<tile_id>.tif``.
+        **channels: ``cyto``, ``nuclei`` and ``helper`` channel keys (see ``training_tiles``).
+
     Returns:
-        ``{model: {tp, fp, fn, precision, recall, f1, tiles: {tile_id: (tp, fp, fn)}}}``.
+        ``{model: {tp, fp, fn, precision, recall, f1, f1_75, mean_iou, boundary_px, tiles}}``.
     """
+    import tifffile
+
     from goudacell.brieflow.shared.segment_cellpose import cellpose_version_for_model
     from goudacell.segment import create_cellpose_model
 
@@ -244,18 +293,28 @@ def evaluate(
             cells = segment_cells(net, rgb, here[0]["diameter"], v)
             for t in here:
                 h, w = t["mask"].shape
-                res[m]["tiles"][t["tile_id"]] = match(
-                    t["mask"], cells[t["y0"] : t["y0"] + h, t["x0"] : t["x0"] + w]
-                )
+                pred = cells[t["y0"] : t["y0"] + h, t["x0"] : t["x0"] + w]
+                res[m]["tiles"][t["tile_id"]] = outline_stats(t["mask"], pred)
+                if save_dir:
+                    d = Path(save_dir) / Path(m).name
+                    d.mkdir(parents=True, exist_ok=True)
+                    tifffile.imwrite(d / f"{t['tile_id']}.tif", pred.astype(np.uint16))
     for r in res.values():
-        tp, fp, fn = (int(sum(c[i] for c in r["tiles"].values())) for i in range(3))
+        rows = r["tiles"].values()
+        tp, fp, fn, tp75 = (int(sum(c[k] for c in rows)) for k in ("tp", "fp", "fn", "tp75"))
+        ious = [x for c in rows for x in c["ious"]]
+        dists = [x for c in rows for x in c["dists"]]
+        gt_n, pred_n = tp + fn, tp + fp
         r.update(
             tp=tp,
             fp=fp,
             fn=fn,
-            precision=tp / max(tp + fp, 1),
-            recall=tp / max(tp + fn, 1),
-            f1=2 * tp / max(2 * tp + fp + fn, 1),
+            precision=tp / max(pred_n, 1),
+            recall=tp / max(gt_n, 1),
+            f1=2 * tp / max(gt_n + pred_n, 1),
+            f1_75=2 * tp75 / max(gt_n + pred_n, 1),
+            mean_iou=float(np.mean(ious)) if ious else 0.0,
+            boundary_px=float(np.mean(dists)) if dists else float("nan"),
         )
     return res
 

@@ -207,3 +207,11 @@ def test_from_run_cli_writes_labeler(tmp_path):
         app, ["labels", "from-run", str(config), str(out), "--objects", "second_objs"]
     )
     assert res.exit_code == 1 and "secondary objects" in res.output
+
+
+def test_field_start_model(tmp_path):
+    spec = _field(tmp_path)
+    spec["fields"][0]["start"] = "b"
+    t = L.build_pack(spec)["tiles"][0]
+    assert t["start"] == "b" and t["prefill"] == t["prefills"]["b"]
+    assert "defBase(t)" in L.build_html(L.build_pack(spec))

@@ -225,11 +225,11 @@ function docId(t) { return safe(S.pack.pack_id) + '~' + safe(t.id) + '~' + S.uid
 function lsKey() { return 'labeler_' + safe(S.pack.pack_id); }
 function lab(id) {
   const t = S.tiles.find(x => x.id === id);
-  if (!S.L[id]) { const base = defBase(); const m = unrle((base && t.prefills?.[base]) || t.prefill || [], t.h * t.w); S.L[id] = { m, base, tags: {}, next: maxOf(m) + 1, done: false, edited: false, hist: [], saved: true, t: 0 }; }
+  if (!S.L[id]) { const base = defBase(t); const m = unrle((base && t.prefills?.[base]) || t.prefill || [], t.h * t.w); S.L[id] = { m, base, tags: {}, next: maxOf(m) + 1, done: false, edited: false, hist: [], saved: true, t: 0 }; }
   return S.L[id];
 }
 function snapshot(id) { const l = lab(id); return { rle: rle(l.m), base: l.base, tags: l.tags, next: l.next, done: l.done, edited: l.edited, t: l.t }; }
-function defBase() { return S.pack.prefill_models?.[0]?.key || ''; }
+function defBase(t) { return (t?.start && t.prefills?.[t.start]) ? t.start : (S.pack.prefill_models?.[0]?.key || ''); }
 function baseMask(t, k) { const c = S.bm[t.id + '|' + k]; if (c) return c; const r = t.prefills?.[k]; return r ? (S.bm[t.id + '|' + k] = unrle(r, t.h * t.w)) : null; }
 function setBase(k) { const t = cur(), l = lab(t.id); if (!t.prefills?.[k] || l.base === k && !l.edited) return; pushHist(t.id);
   l.m = baseMask(t, k).slice(); l.tags = {}; l.next = maxOf(l.m) + 1; l.base = k; S.sel = 0;

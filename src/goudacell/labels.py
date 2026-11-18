@@ -215,8 +215,8 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
             body first), ``prefill_models`` ([{key, name}], the first is the default start) and
             ``fields``, each with ``id``, ``image`` (C×Y×X ``.npy``/``.tif``), ``channels``
             ({key: index}), ``um_per_px``, ``tile_px``, ``n_tiles``, ``split``, ``note``,
-            ``prefills`` ({key: source}) and optional ``reference`` (e.g. nuclei). A source is a
-            path or ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
+            ``prefills`` ({key: source}), optional ``reference`` (e.g. nuclei) and optional
+            ``start`` (the prefill its tiles open on). A source is a path or ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
             ``reference_name``, ``min_area`` (30), ``typical_percentile`` (70, also per field),
             ``provenance`` (free-form: how the prefills were made; carried into exports),
             ``return_to`` (``host:/dir/`` the labeler says to copy the export to), and
@@ -296,10 +296,12 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
                 note=f.get("note", ""),
                 source=dict(field=f["id"], y0=int(y0), x0=int(x0), um_per_px=f["um_per_px"]),
                 images=images,
-                prefill=rle(P[models[0]]),
+                prefill=rle(P[f.get("start") or models[0]]),
                 prefills={k: rle(v) for k, v in P.items()},
                 reference=rle(clean_mask(ref[box], 1)) if ref is not None else None,
             )
+            if f.get("start"):
+                tile["start"] = f["start"]
             tiles.append(tile)
     channels = [dict(c, enc="sqrt") for c in spec["channels"]]
     return dict(

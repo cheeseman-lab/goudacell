@@ -1,7 +1,7 @@
 """Command-line interface for GoudaCell."""
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -449,6 +449,89 @@ def labels_from_run(
         highlight=False,
         soft_wrap=True,
     )
+
+
+@labels_app.command("train")
+def labels_train(
+    spec: Path = typer.Argument(..., help="Pack spec (JSON) the labeler was built from"),
+    export: Path = typer.Argument(..., help="Zip exported from the labeler"),
+    output_dir: Path = typer.Argument(..., help="Folder for the weights (written to models/)"),
+    model: str = typer.Option("cpsam", help="Base model: cpsam, cyto3 or a weights path"),
+    epochs: int = typer.Option(200, help="Training epochs"),
+    all_tiles: bool = typer.Option(False, "--all-tiles", help="Also train on the test tiles"),
+    name: Optional[str] = typer.Option(
+        None, help="Weights file name (default <pack_id>_<model>_ft)"
+    ),
+    cyto: str = typer.Option("cyto", help="Spec channel key of the cell body"),
+    nuclei: Optional[str] = typer.Option(None, help="Spec channel key of the nuclei"),
+    helper: Optional[str] = typer.Option(None, help="Spec channel key of the helper channel"),
+    gpu: bool = typer.Option(True, help="Train on the GPU"),
+) -> None:
+    """Fine-tune a Cellpose cell model on the accepted tiles of a labeler export."""
+    from goudacell.train import finetune, read_spec
+
+    path = finetune(
+        read_spec(spec),
+        export,
+        output_dir,
+        model=model,
+        epochs=epochs,
+        holdout=not all_tiles,
+        name=name,
+        gpu=gpu,
+        cyto=cyto,
+        nuclei=nuclei,
+        helper=helper,
+    )
+    console.print(
+        f"[green]Done![/green] {path}\nUse it as the cell model (cell_model: {path}) with the "
+        f"same cell diameter. Score it on the test tiles:\n"
+        f"  goudacell labels score {spec} {export} --model {model} --model {path}",
+        highlight=False,
+        soft_wrap=True,
+    )
+
+
+@labels_app.command("score")
+def labels_score(
+    spec: Path = typer.Argument(..., help="Pack spec (JSON) the labeler was built from"),
+    export: Path = typer.Argument(..., help="Zip exported from the labeler"),
+    model: List[str] = typer.Option(..., help="Cell model to score; repeat for several"),
+    split: Optional[str] = typer.Option(
+        "test", help="Score tiles in this split; 'all' for every tile"
+    ),
+    cyto: str = typer.Option("cyto", help="Spec channel key of the cell body"),
+    nuclei: Optional[str] = typer.Option(None, help="Spec channel key of the nuclei"),
+    helper: Optional[str] = typer.Option(None, help="Spec channel key of the helper channel"),
+    gpu: bool = typer.Option(True, help="Run the models on the GPU"),
+    save_dir: Optional[Path] = typer.Option(None, help="Write each model's tile masks here"),
+) -> None:
+    """Score cell models against the labels: cells found, and how close their outlines are."""
+    from goudacell.train import evaluate, read_spec
+
+    res = evaluate(
+        read_spec(spec),
+        export,
+        model,
+        None if split == "all" else [split],
+        gpu=gpu,
+        save_dir=save_dir,
+        cyto=cyto,
+        nuclei=nuclei,
+        helper=helper,
+    )
+    console.print(
+        "Cells found: matched at IoU >= 0.5. Outlines: matched cells' mean IoU, F1 at IoU >= 0.75,"
+        " and mean distance from the label's outline (px)."
+    )
+    for m, r in res.items():
+        console.print(
+            f"{m}: {len(r['tiles'])} tiles  TP {r['tp']}  FP {r['fp']}  FN {r['fn']}  "
+            f"F1 {r['f1']:.3f} | mean IoU {r['mean_iou']:.3f}  F1@0.75 {r['f1_75']:.3f}  "
+            f"outline {r['boundary_px']:.2f} px",
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 @labels_app.command("pack")

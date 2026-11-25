@@ -102,7 +102,14 @@ def test_match():
 def test_finetune_cyto3_one_epoch_and_score(tmp_path):
     spec, cells = _spec(tmp_path)
     _export(tmp_path / "e.zip", L.build_pack(spec), cells)
+    from goudacell.segment import create_cellpose_model
+
+    cached = create_cellpose_model("cyto3", gpu=False).net
+    dense = lambda sd: {k: (v.to_dense() if v.is_mkldnn else v).clone() for k, v in sd.items()}  # noqa: E731
+    before = dense(cached.state_dict())
     path = T.finetune(spec, tmp_path / "e.zip", tmp_path / "ft", model="cyto3", epochs=1, gpu=False)
+    after = dense(create_cellpose_model("cyto3", gpu=False).net.state_dict())
+    assert all((before[k] == after[k]).all() for k in before)
     assert path.exists() and path.parent == tmp_path / "ft" / "models"
     meta = L.read_meta(str(path))
     assert meta["tiles"] == ["f0_t0"] and meta["base_model"] == "cyto3"

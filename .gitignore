@@ -39,7 +39,7 @@ data/*
 *.dv
 *_mask.tif
 
-# Tests are kept local-only (not tracked), except the brieflow parity, CellProfiler, env, CLI, cytoplasm, label-pack and training tests
+# Tests are kept local-only (not tracked), except the brieflow parity, CellProfiler, env, CLI, cytoplasm, label-pack, training and secondary-object tests
 tests/*
 !tests/test_brieflow_parity.py
 !tests/test_cellprofiler_backend.py
@@ -48,6 +48,7 @@ tests/*
 !tests/test_cytoplasm.py
 !tests/test_labels.py
 !tests/test_train.py
+!tests/test_second_objs.py
 
 # SLURM outputs
 *.out

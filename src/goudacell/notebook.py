@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import ipywidgets as widgets
+import yaml
 
 from goudacell.config import (
     DualSegmentationParams,
@@ -591,6 +592,19 @@ class ParameterUI:
             description="Method:",
             **text,
         )
+        self.so_name = widgets.Text(
+            value="", placeholder="none (flat keys)", description="Object name:", **text
+        )
+        self.so_mode = widgets.Dropdown(
+            options=["segment", "count"], value=d.second_obj_mode, description="Mode:", **text
+        )
+        self.so_foci_radius = widgets.IntText(
+            value=d.foci_radius, description="Foci radius:", **text
+        )
+        self.so_foci_threshold = widgets.FloatText(
+            value=d.foci_threshold, description="Foci threshold:", **text
+        )
+        self.so_count_box = widgets.HBox([self.so_foci_radius, self.so_foci_threshold])
 
         # Size filtering and cell association (all methods)
         self.so_min_size = widgets.FloatText(
@@ -676,10 +690,14 @@ class ParameterUI:
                 "otsu_three_peak_mid_bg",
                 "otsu_three_peak_mid_fg",
                 "min_cross_entropy",
+                "cell_median_mad",
             ],
             value=d.threshold_method,
             description="Threshold:",
             **text,
+        )
+        self.so_threshold_k = widgets.FloatText(
+            value=d.threshold_k, description="k (noise SDs):", **text
         )
         self.so_opening = widgets.Checkbox(
             value=d.use_morphological_opening, description="Morphological opening"
@@ -720,7 +738,12 @@ class ParameterUI:
         self.so_threshold_box = widgets.VBox(
             [
                 widgets.HTML("<b>Threshold</b>"),
-                widgets.HBox([self.so_thresh_method, self.so_smoothing]),
+                widgets.HBox([self.so_thresh_method, self.so_smoothing, self.so_threshold_k]),
+                widgets.HTML(
+                    "<i>For screens, prefer <code>cell_median_mad</code>: the cutoff is k robust "
+                    "noise SDs above the in-cell median, so it follows brightness but does not "
+                    "chase granules that are absent (needs brieflow 1.5.2).</i>"
+                ),
                 widgets.HBox([self.so_fill_holes, self.so_opening_radius, self.so_opening]),
                 widgets.HBox([self.so_declump_method, self.so_declump_mode]),
                 widgets.HBox([self.so_suppress, self.so_maxima_reduction]),
@@ -737,6 +760,8 @@ class ParameterUI:
         self.so_params_box = widgets.VBox(
             [
                 widgets.HBox([self.so_channel, self.so_method]),
+                widgets.HBox([self.so_name, self.so_mode]),
+                self.so_count_box,
                 size_box,
                 self.so_cellpose_box,
                 self.so_stardist_box,
@@ -773,6 +798,8 @@ class ParameterUI:
         self.preview_feat_btn.on_click(self._on_preview_features)
         self.so_enabled.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.so_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.so_mode.observe(lambda _c: self._sync_mode_visibility(), names="value")
+        self.so_thresh_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.feat_method.observe(lambda _c: self._sync_mode_visibility(), names="value")
         self.feat_method.observe(lambda _c: self._check_cellprofiler(), names="value")
         self.feat_cp_cmd.observe(lambda _c: self._check_cellprofiler(), names="value")
@@ -798,6 +825,9 @@ class ParameterUI:
         self.so_cellpose_box.layout.display = "" if method == "cellpose" else "none"
         self.so_stardist_box.layout.display = "" if method == "stardist" else "none"
         self.so_threshold_box.layout.display = "" if method == "threshold" else "none"
+        self.so_count_box.layout.display = "" if self.so_mode.value == "count" else "none"
+        mad = self.so_thresh_method.value == "cell_median_mad"
+        self.so_threshold_k.layout.display = "" if mad else "none"
         self.feat_cp_box.layout.display = "" if self.feat_method.value == "cellprofiler" else "none"
 
     def _refresh_images(self) -> None:
@@ -944,6 +974,10 @@ class ParameterUI:
             second_obj_detection=self.so_enabled.value,
             second_obj_channel_index=self.so_channel.value,
             second_obj_method=self.so_method.value,
+            second_obj_name=self.so_name.value.strip() or None,
+            second_obj_mode=self.so_mode.value,
+            foci_radius=self.so_foci_radius.value,
+            foci_threshold=self.so_foci_threshold.value,
             second_obj_min_size=self.so_min_size.value,
             second_obj_max_size=self.so_max_size.value,
             size_filter_method=self.so_size_filter.value,
@@ -959,6 +993,7 @@ class ParameterUI:
             second_obj_nms_threshold=self.so_nms.value,
             threshold_smoothing_scale=self.so_smoothing.value,
             threshold_method=self.so_thresh_method.value,
+            threshold_k=self.so_threshold_k.value,
             use_morphological_opening=self.so_opening.value,
             opening_disk_radius=self.so_opening_radius.value,
             fill_holes=self.so_fill_holes.value,
@@ -1645,10 +1680,15 @@ class ParameterUI:
             print(f"Features  → {features_dir}/  (the sbatch run creates this)")
             print("\nRun batch segmentation (from the repo root) with:")
             print(f"  sbatch scripts/run_segmentation.sh {config_path}")
+            so = config.secondary_objects
+            if so is not None:
+                print("\nBrieflow phenotype keys for these objects:")
+                print(yaml.dump(so.to_phenotype_config(), sort_keys=False).rstrip())
+                if so.needs_1_5_2():
+                    print(f"(needs brieflow 1.5.2+: {', '.join(so.needs_1_5_2())})")
             labels_dir = root / "labels" / name
             print("\nThen check and correct the masks in a browser labeler with:")
             print(f"  goudacell labels from-run {config_path} {labels_dir}")
-            so = config.secondary_objects
             if so is not None and so.second_obj_detection:
                 print(
                     f"  goudacell labels from-run {config_path} {labels_dir} --objects second_objs"

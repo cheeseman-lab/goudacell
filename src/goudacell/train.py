@@ -149,8 +149,10 @@ def finetune(
     Returns:
         Path to the weights. Use it as the cell model, with the same cell diameter as before.
     """
-    from goudacell.brieflow.shared.segment_cellpose import cellpose_version_for_model
-    from goudacell.segment import create_cellpose_model
+    from goudacell.brieflow.shared.segment_cellpose import (
+        cellpose_version_for_model,
+        create_cellpose_model,
+    )
 
     tiles = training_tiles(spec, export, None, **channels)
     if holdout:
@@ -161,7 +163,11 @@ def finetune(
     version = cellpose_version_for_model(model)
     base = Path(model).stem if Path(model).exists() else model
     name = name or f"{spec['pack_id']}_{base}_ft"
-    net = create_cellpose_model(model, gpu=gpu).net
+    # a fresh model: the cached one is shared with inference and must keep its weights
+    net = create_cellpose_model.__wrapped__(model, gpu=gpu).net
+    # Cellpose 3 uses MKLDNN for CPU inference, which can't train
+    if getattr(net, "mkldnn", False):
+        net.mkldnn = False
     Path(out_dir, "models").mkdir(parents=True, exist_ok=True)
     if version == 4:
         from cellpose import train

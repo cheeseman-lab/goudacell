@@ -215,8 +215,9 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
             body first), ``prefill_models`` ([{key, name}], the first is the default start) and
             ``fields``, each with ``id``, ``image`` (C×Y×X ``.npy``/``.tif``), ``channels``
             ({key: index}), ``um_per_px``, ``tile_px``, ``n_tiles``, ``split``, ``note``,
-            ``prefills`` ({key: source}) and optional ``reference`` (e.g. nuclei). A source is a
-            path or ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
+            ``prefills`` ({key: source}), optional ``reference`` (e.g. nuclei) and optional
+            ``start`` (the prefill its tiles open on). A source is a path or
+            ``[path.npz, key]``. Optional: ``object``, ``tags``, ``instructions``,
             ``reference_name``, ``min_area`` (30), ``typical_percentile`` (70, also per field),
             ``provenance`` (free-form: how the prefills were made; carried into exports),
             ``return_to`` (``host:/dir/`` the labeler says to copy the export to), and
@@ -296,10 +297,12 @@ def build_pack(spec: Dict[str, Any], require_meta: bool = True) -> Dict[str, Any
                 note=f.get("note", ""),
                 source=dict(field=f["id"], y0=int(y0), x0=int(x0), um_per_px=f["um_per_px"]),
                 images=images,
-                prefill=rle(P[models[0]]),
+                prefill=rle(P[f.get("start") or models[0]]),
                 prefills={k: rle(v) for k, v in P.items()},
                 reference=rle(clean_mask(ref[box], 1)) if ref is not None else None,
             )
+            if f.get("start"):
+                tile["start"] = f["start"]
             tiles.append(tile)
     channels = [dict(c, enc="sqrt") for c in spec["channels"]]
     return dict(
@@ -350,6 +353,8 @@ def spec_from_run(
         um_per_px: Pixel size, shown on the page; None shows sizes in pixels.
         max_fields: Use at most this many fields, evenly spaced through the run.
 
+    With 5 or more fields, every 5th is in the "test" split, held out by ``goudacell labels train``.
+
     Returns:
         A spec for ``build_pack``. Fields whose masks are missing are skipped.
 
@@ -398,7 +403,7 @@ def spec_from_run(
     if max_fields and len(files) > max_fields:
         files = [files[i] for i in np.linspace(0, len(files) - 1, max_fields).round().astype(int)]
     fields = []
-    for f in files:
+    for i, f in enumerate(files):
         if objects == "second_objs":
             prefill, ref = cfg.get_second_obj_output_path(f), cfg.get_dual_output_paths(f)[1]
         elif dual:
@@ -414,10 +419,12 @@ def spec_from_run(
             um_per_px=um_per_px,
             tile_px=tile_px,
             n_tiles=n_tiles,
-            split="",
+            split="test" if len(files) >= 5 and i % 5 == 4 else "train",
             note=f.name,
             prefills={"run": str(prefill)},
         )
+        if objects == "cells":
+            field["cell_diameter_px"] = cfg.dual.cell_diameter if dual else cfg.diameter
         if ref is not None and ref.exists():
             field["reference"] = str(ref)
         fields.append(field)

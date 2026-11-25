@@ -137,6 +137,23 @@ goudacell labels html run-cells_r2.json run-cells_r2_labeler.html
 started from, and how the masks were made. `labels read` also flags objects in several pieces or
 under `--min-area` px.
 
+### Fine-tuning on the labels
+
+```bash
+S=labels/<name>/<name>-cells_spec.json                 # written by labels from-run
+goudacell labels train $S labels.zip ft/ --model cpsam  # or cyto3
+goudacell labels score $S labels.zip --model cpsam --model ft/models/<name>-cells_cpsam_ft
+goudacell labels train $S labels.zip ft/ --model cpsam --all-tiles --name <name>_final
+```
+
+- Training uses the accepted tiles. Tiles in the `test` split (every 5th image) are held out, so
+  `labels score` compares the tuned and base models on cells they did not train on. Train again
+  with `--all-tiles` for the model you use.
+- The model sees each image exactly as `goudacell segment` gives it in dual mode. Set the weights
+  path as the cell model (`cell_model`), with the same cell diameter as before.
+- cpsam needs a GPU; run it in an sbatch job. The weights get a `.meta.json` with the tiles and
+  settings they were trained on.
+
 ### Several models, or masks from elsewhere
 
 To compare models on the same tiles, write a spec and run `goudacell labels pack spec.json

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0
+
+- **Labeler.** `goudacell labels from-run CONFIG OUT` turns a finished run into one offline HTML
+  page that shows the masks on the images; annotators fix outlines and export a zip.
+  `labels read` writes the returned masks, `labels next` starts the next round from them, and
+  `labels pack`/`labels html` compare several models. `goudacell segment` writes a
+  `.meta.json` next to each mask saying how it was made. The page tells the annotator where to
+  copy the export back to (the host and folder the labeler was made in).
+- **Fine-tuning.** `goudacell labels train SPEC EXPORT OUT` fine-tunes cpsam (Cellpose 4) or
+  cyto3 (Cellpose 3) on the accepted tiles, with the input `goudacell segment` gives Cellpose in
+  dual mode; the weights run as `cell_model` at the same cell diameter. `labels score` compares
+  models on the held-out `test` tiles: cells found (F1 at IoU 0.5) and outline accuracy (mean
+  IoU, F1 at IoU 0.75, outline distance in px). A spec field's `start` sets the model its tiles
+  open on.
+- **Secondary objects for brieflow 1.5.2.** Named objects, count mode (`second_obj_mode`,
+  `foci_radius`, `foci_threshold`) and the `cell_median_mad` threshold (`threshold_k`, default 5:
+  a cutoff k robust noise SDs above the in-cell median, which follows brightness and does not
+  invent objects where a perturbation removes them). Generating a config prints the brieflow
+  keys. Running these needs the vendored brieflow at 1.5.2; until the re-sync they raise a
+  clear error. The vendored brieflow is still v1.5.1.
+- README is one guide (workflow, outputs, labeler, CellProfiler); the repo is `ruff format`ted.
+
 ## 0.4.3
 
 - **brieflow 1.5.1.** The vendored phenotype modules are re-synced to brieflow `v1.5.1` (61457ae).
